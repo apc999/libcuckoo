@@ -1,0 +1,36 @@
+* when load factor is low (an insert may only need to touch one bucket), 
+using parition lock to coordinate inserts; while load factor becomes high
+(an insert must edit a number of buckets), switch back to global lock
+
+* using (3,4) cuckoo hashing to have two local buckets and one remote bucket.
+Therefore grabbing a partition lock is good enough for most inserts
+
+
+* an availalbe bit to indicate the vacancy of a slot?
+
+* versioning on keys or on buckets
+
+a problem with tracking key-version is,
+when displacing key x from bucket src to bucket dst,
+if there is another thread looking up a different key y
+in the same bucket dst, this lookup thread may see 
+partially-written data due to the displacement, if updating
+the bucket dst is not atomic.
+
+from dave's email:
+1)  Right now, we have a potential starvation issue w.r.t. high-rate modifications to a single key (or one that shares the
+key lock version counter):  A reader may _never_ successfully read the key.
+
+A potential solution to that is to try N retries (~= 10 or so) and then simply grab the global write lock in order to execute
+the read.  I don't know if it's worth it, but it at least gives some bounds on the maximum read delay.  I suspect it's never
+actually needed.
+
+2)  For the resizing, I think it would be a good idea to start out by listing the desirable properties for resizing --
+resize-in-place, not blocking {reads, writes} for long periods of time, maintaining high throughput, etc., just so we have a
+decent list in front of us for thinking about the problem.
+
+3)  you'd mentioned the idea of using a lock per "page" for cuckoo-hashing-in-a-page style updates and trying to get the
+common case to only need one lock per write.  I like it.  But a question is then:  Do you also only use one counter per
+*page*, merging the granularity of the locking and the version counters, or do you keep things the same as they are now?
+
+
