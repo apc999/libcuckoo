@@ -469,7 +469,7 @@ static cuckoo_status _cuckoo_delete(cuckoo_hashtable_t* h,
 static void _cuckoo_clean(cuckoo_hashtable_t* h, size_t size) {
     size_t i, j, ii;
 
-    for (ii = 0; ii < size && h->expanding; ++ii) {
+    for (ii = 0; ii < size; ++ii) {
         i = h->cleaned_buckets;
         uint32_t hv;
         for (j = 0; j < bucketsize; j ++) {
@@ -481,6 +481,7 @@ static void _cuckoo_clean(cuckoo_hashtable_t* h, size_t size) {
             size_t i2 = _alt_index(h, hv, i1);
             if ((i != i1) && (i != i2)) {
                 //DBG("delete key %u , i=%zu i1=%zu i2=%zu\n", TABLE_KEY(h, i, j), i, i1, i2);
+
                 TABLE_KEY(h, i, j) = 0;
                 TABLE_VAL(h, i, j) = 0;
             }
@@ -492,7 +493,7 @@ static void _cuckoo_clean(cuckoo_hashtable_t* h, size_t size) {
             return;
         }
     }
-    DBG("_cuckoo_clean: cleaned_buckets = %zu\n", h->cleaned_buckets);
+    //DBG("_cuckoo_clean: cleaned_buckets = %zu\n", h->cleaned_buckets);
 }
 
 
@@ -575,6 +576,7 @@ cuckoo_status cuckoo_find(cuckoo_hashtable_t* h,
 cuckoo_status cuckoo_insert(cuckoo_hashtable_t* h,
                             const char *key,
                             const char* val) {
+    mutex_lock(&h->lock);
 
     uint32_t hv = _hashed_key(key);
     size_t i1   = _index_hash(h, hv);
@@ -583,8 +585,6 @@ cuckoo_status cuckoo_insert(cuckoo_hashtable_t* h,
 
     ValType oldval;
     cuckoo_status st;
-
-    mutex_lock(&h->lock);
 
     st = _cuckoo_find(h, key, (char*) &oldval, i1, i2, keylock);
     if  (st == ok) {
@@ -607,14 +607,14 @@ cuckoo_status cuckoo_insert(cuckoo_hashtable_t* h,
 cuckoo_status cuckoo_delete(cuckoo_hashtable_t* h,
                             const char *key) {
 
+    mutex_lock(&h->lock);
+
     uint32_t hv = _hashed_key(key);
     size_t i1   = _index_hash(h, hv);
     size_t i2   = _alt_index(h, hv, i1);
     size_t keylock = _lock_index(hv);
 
     cuckoo_status st;
-
-    mutex_lock(&h->lock);
 
     st = _cuckoo_delete(h, key, i1, i2, keylock);
 
@@ -649,10 +649,6 @@ cuckoo_status cuckoo_expand(cuckoo_hashtable_t* h) {
     h->buckets = new_buckets;
     h->hashpower ++;
     h->cleaned_buckets = 0;
-
-    // for debug
-    _cuckoo_clean(h, hashsize(h->hashpower));
-    h->expanding = false;
 
     mutex_unlock(&h->lock);
 

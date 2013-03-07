@@ -171,7 +171,8 @@ static void *insert_thread(void *arg) {
                 if (st == ok) {
                     //printf("[%s] grow table returns\n", name);
                     //expansion ++;
-                    th->ops --; //i --;
+                    //th->ops --; 
+                    i --;
                 }
                 else if (st == failure_under_expansion) {
                     printf("[writer%d] grow table is already on-going\n", th->id);
@@ -197,6 +198,7 @@ static void usage() {
     printf("test_cuckoo_mt:\ttest cuckoo hash table with multiple threads\n");
     printf("\t-r #: the number of readers\n");
     printf("\t-w #: the number of writers\n");
+    printf("\t-p #: the initial powerhash\n");
     printf("\t-h  : show usage\n");
 }
 
@@ -210,10 +212,11 @@ int main(int argc, char** argv)
     double tvsd, tved, tdiff;
 
     char ch; 
-    while ((ch = getopt(argc, argv, "r:w:h")) != -1) {
+    while ((ch = getopt(argc, argv, "r:w:p:h")) != -1) {
         switch (ch) {
         case 'w': num_writers = atoi(optarg); break;
         case 'r': num_readers = atof(optarg); break;
+        case 'p': power       = atof(optarg); break;
         case 'h': usage(argv[0]); exit(0); break;
         default:
             usage(argv[0]);
@@ -224,7 +227,7 @@ int main(int argc, char** argv)
 
     task_init(total);
 
-    printf("initializing hash table\n");
+    printf("initializing hash table with power=%zu\n", power);
     table = cuckoo_init(power);
     cuckoo_report(table);
 
@@ -267,11 +270,11 @@ int main(int argc, char** argv)
         tdiff = tved - tvsd;
         printf("[tput in MOPS] ");
         for (i = 0; i < num_readers; i ++) {
-            printf("reader%d %4.2f ", i, (reader_args[i].num_read - last_num_read[i])/ tdiff/ million );
+            printf("reader%d %6.4f ", i, (reader_args[i].num_read - last_num_read[i])/ tdiff/ million );
             last_num_read[i] = reader_args[i].num_read;
         }
         for (i = 0; i < num_writers; i ++) {
-            printf("writer%d %4.2f ", i, (writer_args[i].num_written - last_num_written[i])/ tdiff/ million );
+            printf("writer%d %6.4f ", i, (writer_args[i].num_written - last_num_written[i])/ tdiff/ million );
             last_num_written[i] = writer_args[i].num_written;
         }
         printf("\n");
@@ -292,7 +295,7 @@ int main(int argc, char** argv)
             passed = false;
     }
 
-
+    cuckoo_report(table);
     cuckoo_exit(table);
 
     printf("[%s]\n", passed ? "PASSED" : "FAILED");
