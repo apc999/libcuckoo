@@ -650,6 +650,9 @@ cuckoo_status cuckoo_expand(cuckoo_hashtable_t* h) {
     h->hashpower ++;
     h->cleaned_buckets = 0;
 
+    h->expanding = false;
+    _cuckoo_clean(h, hashsize(h->hashpower));
+
     mutex_unlock(&h->lock);
 
     free(old_buckets);
@@ -664,4 +667,8 @@ void cuckoo_report(cuckoo_hashtable_t* h) {
     DBG("total number of items %zu\n", h->hashitems);
     DBG("total size %zu Bytes, or %.2f MB\n", sz, (float) sz / (1 <<20));
     DBG("load factor %.4f\n", 1.0 * h->hashitems / bucketsize / hashsize(h->hashpower));
+}
+
+float cuckoo_loadfactor(cuckoo_hashtable_t* h) {
+    return 1.0 * h->hashitems / bucketsize / hashsize(h->hashpower);
 }

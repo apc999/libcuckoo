@@ -158,4 +158,15 @@ cuckoo_status cuckoo_expand(cuckoo_hashtable_t* h);
  */
 void cuckoo_report(cuckoo_hashtable_t* h);
 
+
+
+/** 
+ * @brief Return the load factor of this hash table
+ * 
+ * @param h handler to the hash table
+ * 
+ * @return load factor
+ */
+float cuckoo_loadfactor(cuckoo_hashtable_t* h);
+
 #endif

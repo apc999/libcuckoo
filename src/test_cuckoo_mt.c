@@ -268,7 +268,7 @@ int main(int argc, char** argv)
         tvsd = (double)tvs.tv_sec + (double)tvs.tv_usec/1000000;
         tved = (double)tve.tv_sec + (double)tve.tv_usec/1000000;
         tdiff = tved - tvsd;
-        printf("[tput in MOPS] ");
+        printf("[tput in MOPS] load factor=%.2f ", cuckoo_loadfactor(table));
         for (i = 0; i < num_readers; i ++) {
             printf("reader%d %6.4f ", i, (reader_args[i].num_read - last_num_read[i])/ tdiff/ million );
             last_num_read[i] = reader_args[i].num_read;
