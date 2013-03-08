@@ -33,12 +33,9 @@
 #define VALUE(key) (3*key-15)
 
 static cuckoo_hashtable_t* table = NULL;
-static size_t power = 25;
-static size_t total =  30 * million;
-static size_t total_inserted;
+static volatile size_t total_inserted;
 static volatile bool keep_reading = true;
 static volatile bool keep_writing = true;
-static bool passed  = true;
 
 typedef struct {
     size_t num_read;
@@ -206,8 +203,12 @@ int main(int argc, char** argv)
 {
 
     int i;
+    size_t power = 25;
+    size_t total =  30 * million;
+    bool passed  = true;
     int num_writers = 1;
     int num_readers = 1;
+
     struct timeval tvs, tve; 
     double tvsd, tved, tdiff;
 
@@ -268,7 +269,7 @@ int main(int argc, char** argv)
         tvsd = (double)tvs.tv_sec + (double)tvs.tv_usec/1000000;
         tved = (double)tve.tv_sec + (double)tve.tv_usec/1000000;
         tdiff = tved - tvsd;
-        printf("[tput in MOPS] load factor=%.2f ", cuckoo_loadfactor(table));
+        printf("[tput(MOPS)] loadfactor=%.2f inserted=%zuM ", cuckoo_loadfactor(table), total_inserted/million);
         for (i = 0; i < num_readers; i ++) {
             printf("reader%d %6.4f ", i, (reader_args[i].num_read - last_num_read[i])/ tdiff/ million );
             last_num_read[i] = reader_args[i].num_read;
