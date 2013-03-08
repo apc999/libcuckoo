@@ -25,7 +25,11 @@
 #include <sys/time.h>         /* for gettimeofday */
 #include <getopt.h>
 
+#include <algorithm>
+
+extern "C" {
 #include "cuckoohash.h"
+}
 
 #define million 1000000
 #define VALUE(key) (3*key-15)
@@ -34,6 +38,8 @@ static cuckoo_hashtable_t* table = NULL;
 static volatile size_t total_inserted;
 static volatile bool keep_reading = true;
 static volatile bool keep_writing = true;
+
+std::mt19937_64 rng;
 
 typedef struct {
     size_t num_read;
@@ -53,7 +59,7 @@ bool* task_complete_flag;
 static void task_init(size_t total) {
     pthread_mutex_init(&task_mutex, NULL);
     task_num = total / task_size;
-    task_complete_flag = calloc(sizeof(bool), task_num);
+    task_complete_flag = new bool[task_num];
     memset(task_complete_flag, false, task_num);
     task_next = 0;
     task_done = 0;
@@ -110,7 +116,8 @@ static void *lookup_thread(void *arg) {
             continue;
         }
 
-        size_t i = (int) (cheap_rand() % total_inserted);
+        //size_t i = (int) (cheap_rand() % total_inserted);
+        size_t i = (int) (rng() % total_inserted);
         if (i == 0)
             i = 1;
         assert(i <= total_inserted);
@@ -191,8 +198,8 @@ static void *insert_thread(void *arg) {
     pthread_exit(NULL);
 }
 
-static void usage() {
-    printf("test_cuckoo_mt:\ttest cuckoo hash table with multiple threads\n");
+static void usage(char* myname) {
+    printf("%s:\ttest cuckoo hash table with multiple threads\n", myname);
     printf("\t-r #: the number of readers\n");
     printf("\t-w #: the number of writers\n");
     printf("\t-p #: the initial powerhash\n");
@@ -232,11 +239,11 @@ int main(int argc, char** argv)
     table = cuckoo_init(power);
     cuckoo_report(table);
 
-    pthread_t* readers = calloc(sizeof(pthread_t), num_readers);
-    pthread_t* writers = calloc(sizeof(pthread_t), num_writers);
+    pthread_t* readers = new pthread_t[num_readers];
+    pthread_t* writers = new pthread_t[num_writers];
 
-    thread_arg_t* reader_args = calloc(sizeof(thread_arg_t), num_readers);
-    thread_arg_t* writer_args = calloc(sizeof(thread_arg_t), num_writers);
+    thread_arg_t* reader_args = new thread_arg_t[num_readers];
+    thread_arg_t* writer_args = new thread_arg_t[num_writers];
 
 
     // create threads as writers
@@ -261,8 +268,8 @@ int main(int argc, char** argv)
     gettimeofday(&tvs, NULL); 
     tvsd = (double)tvs.tv_sec + (double)tvs.tv_usec/1000000;
 
-    size_t* last_num_read = calloc(sizeof(size_t), num_readers);
-    size_t* last_num_written = calloc(sizeof(size_t), num_writers);
+    size_t* last_num_read = new size_t[num_readers];
+    size_t* last_num_written = new size_t[num_writers];
     memset(last_num_read, 0, num_readers);
     memset(last_num_written, 0, num_writers);
     while (keep_reading && keep_writing) {

@@ -22,7 +22,6 @@
 #include "city.h"
 #include "util.h"
 
-
 typedef enum {
     ok = 0,
     failure = 1,
@@ -33,8 +32,6 @@ typedef enum {
     failure_table_full = 6,
     failure_under_expansion = 7,
 } cuckoo_status;
-
-
 
 
 

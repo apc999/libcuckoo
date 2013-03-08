@@ -5,6 +5,7 @@ autom4te.cache/
 config.h
 config.h.in
 config.status
+config.log
 configure
 depcomp
 install-sh
@@ -26,3 +27,5 @@ lib/*.la
 libtool
 ltmain.sh
 m4/*
+*/*.o
+perf*

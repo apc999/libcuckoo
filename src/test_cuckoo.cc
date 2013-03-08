@@ -8,6 +8,9 @@
  * 
  * 
  */
+#ifdef HAVE_CONFIG_H
+#  include "config.h"
+#endif
 
 #include <assert.h>
 #include <stdio.h>
@@ -18,7 +21,10 @@
 #include <pthread.h>
 #include <math.h>
 
+
+extern "C" {
 #include "cuckoohash.h"
+}
 
 int main(int argc, char** argv) 
 {
