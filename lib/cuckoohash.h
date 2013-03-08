@@ -65,12 +65,6 @@ typedef struct {
     /* the mutex to serialize insert, delete, expand */
     pthread_mutex_t lock;
 
-    /* record the path */
-    void* cuckoo_path;
-
-    /* number of cuckoo operations*/
-    size_t kick_count;
-
     /* denoting if the table is doing expanding */
     bool expanding;
 

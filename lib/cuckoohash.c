@@ -127,7 +127,7 @@ static inline bool is_slot_empty(cuckoo_hashtable_t* h,
         size_t i1 = _index_hash(h, hv);
         size_t i2 = _alt_index(h, hv, i1);
         if ((i != i1) && (i != i2)) {
-            TABLE_KEY(h, i, j)==0;
+            TABLE_KEY(h, i, j)=0;
             return true;
         }
     }
@@ -155,16 +155,17 @@ CuckooRecord;
  * @return depth on success, -1 otherwise
  */
 static int _cuckoopath_search(cuckoo_hashtable_t* h,
-                              size_t depth_start,
-                              size_t *cp_index) {
+                              CuckooRecord* cuckoo_path,
+                              size_t *cp_index,
+                              size_t *num_kicks) {
 
-    int depth = depth_start;
-    while ((h->kick_count < MAX_CUCKOO_COUNT) &&
+    int depth = 0;
+    while ((*num_kicks < MAX_CUCKOO_COUNT) &&
            (depth >= 0) &&
            (depth < MAX_CUCKOO_COUNT - 1)) {
 
-        CuckooRecord *curr = ((CuckooRecord*) h->cuckoo_path) + depth;
-        CuckooRecord *next = ((CuckooRecord*) h->cuckoo_path) + depth + 1;
+        CuckooRecord *curr = cuckoo_path + depth;
+        CuckooRecord *next = cuckoo_path + depth + 1;
 
         /*
          * Check if any slot is already free
@@ -190,19 +191,19 @@ static int _cuckoopath_search(cuckoo_hashtable_t* h,
             next->buckets[idx] = _alt_index(h, hv, i);
         }
 
-        h->kick_count += NUM_CUCKOO_PATH;
+        *num_kicks += NUM_CUCKOO_PATH;
         depth ++;
     }
 
-    DBG("%zu max cuckoo achieved, abort\n", h->kick_count);
+    DBG("%zu max cuckoo achieved, abort\n", *num_kicks);
     return -1;
 }
 
 static int _cuckoopath_move(cuckoo_hashtable_t* h,
-                            size_t depth_start,
+                            CuckooRecord* cuckoo_path,
+                            size_t depth,
                             size_t idx) {
 
-    int depth = depth_start;
     while (depth > 0) {
 
         /*
@@ -210,8 +211,8 @@ static int _cuckoopath_move(cuckoo_hashtable_t* h,
          * and make buckets[i1] slot[j1] available
          *
          */
-        CuckooRecord *from = ((CuckooRecord*) h->cuckoo_path) + depth - 1;
-        CuckooRecord *to   = ((CuckooRecord*) h->cuckoo_path) + depth;
+        CuckooRecord *from = cuckoo_path + depth - 1;
+        CuckooRecord *to   = cuckoo_path + depth;
         size_t i1 = from->buckets[idx];
         size_t j1 = from->slots[idx];
         size_t i2 = to->buckets[idx];
@@ -248,35 +249,44 @@ static int _cuckoopath_move(cuckoo_hashtable_t* h,
 
 }
 
-static int _run_cuckoo(cuckoo_hashtable_t* h,
-                       size_t i1,
-                       size_t i2) {
-    int cur;
+static bool _run_cuckoo(cuckoo_hashtable_t* h,
+                        size_t i1,
+                        size_t i2,
+                        size_t* i) {
+
+    CuckooRecord* cuckoo_path;
+
+    cuckoo_path = malloc(MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
+    if (! cuckoo_path) {
+        fprintf(stderr, "Failed to init cuckoo path.\n");
+        return -1;
+    }
+    memset(cuckoo_path, 0, MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
 
     size_t idx;
-    size_t depth = 0;
     for (idx = 0; idx < NUM_CUCKOO_PATH; idx ++) {
-        if (idx< NUM_CUCKOO_PATH/2)
-            ((CuckooRecord*) h->cuckoo_path)[depth].buckets[idx] = i1;
+        if (idx < NUM_CUCKOO_PATH / 2)
+            cuckoo_path[0].buckets[idx] = i1;
         else
-            ((CuckooRecord*) h->cuckoo_path)[depth].buckets[idx] = i2;
+            cuckoo_path[0].buckets[idx] = i2;
     }
 
-    h->kick_count = 0;
+    size_t num_kicks = 0;
     while (1) {
+        int depth;
+        depth = _cuckoopath_search(h, cuckoo_path, &idx, &num_kicks);
+        if (depth < 0) 
+            break;
 
-        cur = _cuckoopath_search(h, depth, &idx);
-        if (cur < 0)
-            return -1;
-
-        cur = _cuckoopath_move(h, cur, idx);
-        if (cur == 0)
-            return idx;
-
-        depth = cur - 1;
+        int curr_depth = _cuckoopath_move(h, cuckoo_path, depth, idx);
+        if (curr_depth == 0) {
+            *i = cuckoo_path[0].buckets[idx];
+            free(cuckoo_path);
+            return true;
+        }
     }
-
-    return -1;
+    free(cuckoo_path);
+    return false;
 }
 
 
@@ -435,11 +445,9 @@ static cuckoo_status _cuckoo_insert(cuckoo_hashtable_t* h,
     /*
      * we are unlucky, so let's perform cuckoo hashing
      */
-    int idx = _run_cuckoo(h, i1, i2);
-    if (idx >= 0) {
-        size_t i;
-        i = ((CuckooRecord*) h->cuckoo_path)[0].buckets[idx];
-        //j = cuckoo_path[0].slots[idx];
+    size_t i;
+            
+    if (_run_cuckoo(h, i1, i2, &i)) {
         if (_try_add_to_bucket(h, key, val, i, keylock)) {
             return ok;
         }
@@ -510,7 +518,6 @@ cuckoo_hashtable_t* cuckoo_init(const int hashtable_init) {
 
     h->hashpower  = (hashtable_init > 0) ? hashtable_init : HASHPOWER_DEFAULT;
     h->hashitems  = 0;
-    h->kick_count = 0;
     h->expanding  = false;
     pthread_mutex_init(&h->lock, NULL);
 
@@ -526,21 +533,14 @@ cuckoo_hashtable_t* cuckoo_init(const int hashtable_init) {
         goto Cleanup;
     }
 
-    h->cuckoo_path = malloc(MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
-    if (! h->cuckoo_path) {
-        fprintf(stderr, "Failed to init cuckoo path.\n");
-        goto Cleanup;
-    }
 
     memset(h->buckets, 0, hashsize(h->hashpower) * sizeof(Bucket));
     memset(h->keyver_array, 0, keyver_count * sizeof(uint32_t));
-    memset(h->cuckoo_path, 0, MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
 
     return h;
 
 Cleanup:
     if (h) {
-        free(h->cuckoo_path);
         free(h->keyver_array);
         free(h->buckets);
     }
