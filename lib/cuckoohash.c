@@ -55,6 +55,7 @@ Bucket;
 #define incr_keyver(h, idx)                                      \
     __sync_fetch_and_add(&((uint32_t*) h->keyver_array)[idx & keyver_mask], 1)
 
+
 static inline  uint32_t _hashed_key(const char* key) {
     return CityHash32(key, sizeof(KeyType));
 }
@@ -126,6 +127,7 @@ static inline bool is_slot_empty(cuckoo_hashtable_t* h,
         size_t i1 = _index_hash(h, hv);
         size_t i2 = _alt_index(h, hv, i1);
         if ((i != i1) && (i != i2)) {
+            TABLE_KEY(h, i, j)==0;
             return true;
         }
     }
@@ -567,7 +569,7 @@ cuckoo_status cuckoo_find(cuckoo_hashtable_t* h,
     cuckoo_status st = _cuckoo_find(h, key, val, i1, i2, keylock);
 
     if (st == failure_key_not_found) {
-        DBG("miss for key %u i1=%zu i2=%zu hv=%zu\n", *((KeyType*) key), i1, i2, hv);
+        DBG("miss for key %u i1=%zu i2=%zu hv=%u\n", *((KeyType*) key), i1, i2, hv);
     }
 
     return st;
@@ -650,8 +652,8 @@ cuckoo_status cuckoo_expand(cuckoo_hashtable_t* h) {
     h->hashpower ++;
     h->cleaned_buckets = 0;
 
-    h->expanding = false;
-    _cuckoo_clean(h, hashsize(h->hashpower));
+    //h->expanding = false;
+    //_cuckoo_clean(h, hashsize(h->hashpower));
 
     mutex_unlock(&h->lock);
 
