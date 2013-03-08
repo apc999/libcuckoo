@@ -184,7 +184,8 @@ static int _cuckoopath_search(cuckoo_hashtable_t* h,
             }
 
             /* pick the victim as the j-th item */
-            j = rand() % bucketsize;
+            j = (cheap_rand() >> 20) % bucketsize;
+
             curr->slots[idx] = j;
             curr->keys[idx]  = TABLE_KEY(h, i, j);
             uint32_t hv = _hashed_key((char*) &TABLE_KEY(h, i, j));
@@ -228,7 +229,7 @@ static int _cuckoopath_move(cuckoo_hashtable_t* h,
             return depth;
         }
 
-        assert(is_slot_empty(h, i2, j2));
+        //assert(is_slot_empty(h, i2, j2));
 
         uint32_t hv = _hashed_key((char*) &TABLE_KEY(h, i1, j1));
         size_t keylock   = _lock_index(hv);
@@ -307,7 +308,6 @@ static bool _try_read_from_bucket(cuckoo_hashtable_t* h,
     for (j = 0; j < bucketsize; j ++) {
 
         if (keycmp((char*) &TABLE_KEY(h, i, j), key)) {
-
             memcpy(val, (char*) &TABLE_VAL(h, i, j), sizeof(ValType));
             return true;
         }
@@ -445,7 +445,7 @@ static cuckoo_status _cuckoo_insert(cuckoo_hashtable_t* h,
     /*
      * we are unlucky, so let's perform cuckoo hashing
      */
-    size_t i;
+    size_t i = 0;
             
     if (_run_cuckoo(h, i1, i2, &i)) {
         if (_try_add_to_bucket(h, key, val, i, keylock)) {

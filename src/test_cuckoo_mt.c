@@ -22,10 +22,8 @@
 #include <pthread.h>
 #include <math.h>
 #include <unistd.h>           /* for sleep */
-#include <sys/time.h>        /* for gettimeofday */
-#ifdef HAVE_GETOPT_H
-#  include <getopt.h>
-#endif
+#include <sys/time.h>         /* for gettimeofday */
+#include <getopt.h>
 
 #include "cuckoohash.h"
 
@@ -107,11 +105,12 @@ static void *lookup_thread(void *arg) {
     th->num_written = 0;
     
     while (keep_reading) {
+
         if (total_inserted == 0) {
             continue;
         }
 
-        size_t i = (int) (((float )rand() / RAND_MAX) * total_inserted);
+        size_t i = (int) (cheap_rand() % total_inserted);
         if (i == 0)
             i = 1;
         assert(i <= total_inserted);
@@ -147,6 +146,7 @@ static void *insert_thread(void *arg) {
     th->num_written = 0;
     
     while (keep_writing) {
+
         size_t i, task;
         task = task_assign();
         if (task >= task_num)
@@ -237,6 +237,8 @@ int main(int argc, char** argv)
 
     thread_arg_t* reader_args = calloc(sizeof(thread_arg_t), num_readers);
     thread_arg_t* writer_args = calloc(sizeof(thread_arg_t), num_writers);
+
+
     // create threads as writers
     for (i = 0; i < num_writers; i ++) {
         writer_args[i].id = i;

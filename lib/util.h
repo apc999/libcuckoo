@@ -6,6 +6,21 @@
 
 #define mutex_unlock(mutex) pthread_mutex_unlock(mutex)
 
+static inline
+size_t cheap_rand() {
+    static size_t cnt = 0;
+    static size_t r1, r2;
+    if ((cnt & 0xff) == 0) {
+        r1 = rand();
+    }
+    if ((cnt & 0xff) == 0x80) {
+        r2 = rand();
+    }
+    r1 += r2;
+    cnt ++;
+    return r1;
+}
+
 #define keycmp(p1, p2) (memcmp(p1, p2, sizeof(KeyType)) == 0)
 
 #define ANSI_COLOR_RED     "\x1b[31m"
