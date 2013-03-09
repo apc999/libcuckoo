@@ -117,11 +117,8 @@ static void *lookup_thread(void *arg) {
         }
 
         //size_t i = (int) (cheap_rand() % total_inserted);
-        std::uniform_int_distribution<> uniform(0,total_inserted);
+        std::uniform_int_distribution<> uniform(1,total_inserted);
 	    size_t i = uniform(rng);
-        if (i == 0)
-            i = 1;
-        assert(i <= total_inserted);
         th->ops ++;
         key = (KeyType) i;
         st = cuckoo_find(table, (const char*) &key, (char*) &val);
