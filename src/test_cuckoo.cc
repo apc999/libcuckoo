@@ -40,7 +40,7 @@ int main(int argc, char** argv)
 
     printf("inserting keys to the hash table\n");
     int failure = -1;
-    for (i = 1; i < numkeys; i ++) {
+    for (i = 1; i < numkeys; i++) {
         KeyType key = (KeyType) i;
         ValType val = (ValType) i * 2 - 1;
         cuckoo_status st;
@@ -61,7 +61,7 @@ int main(int argc, char** argv)
 
 
     printf("looking up keys in the hash table\n");
-    for (i = 1; i < numkeys; i ++) {
+    for (i = 1; i < numkeys; i++) {
         ValType val1, val2;
         KeyType key = (KeyType) i;
         cuckoo_status st1 = cuckoo_find(smalltable, (const char*) &key, (char*) &val1);

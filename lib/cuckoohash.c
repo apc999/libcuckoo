@@ -171,11 +171,11 @@ static int _cuckoopath_search(cuckoo_hashtable_t* h,
          * Check if any slot is already free
          */
         size_t idx;
-        for (idx = 0; idx < NUM_CUCKOO_PATH; idx ++) {
+        for (idx = 0; idx < NUM_CUCKOO_PATH; idx++) {
             size_t i;
             size_t j;
             i = curr->buckets[idx];
-            for (j = 0; j < bucketsize; j ++) {
+            for (j = 0; j < bucketsize; j++) {
                 if (is_slot_empty(h, i, j)) {
                     curr->slots[idx] = j;
                     *cp_index   = idx;
@@ -193,7 +193,7 @@ static int _cuckoopath_search(cuckoo_hashtable_t* h,
         }
 
         *num_kicks += NUM_CUCKOO_PATH;
-        depth ++;
+        depth++;
     }
 
     DBG("%zu max cuckoo achieved, abort\n", *num_kicks);
@@ -265,7 +265,7 @@ static bool _run_cuckoo(cuckoo_hashtable_t* h,
     memset(cuckoo_path, 0, MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
 
     size_t idx;
-    for (idx = 0; idx < NUM_CUCKOO_PATH; idx ++) {
+    for (idx = 0; idx < NUM_CUCKOO_PATH; idx++) {
         if (idx < NUM_CUCKOO_PATH / 2)
             cuckoo_path[0].buckets[idx] = i1;
         else
@@ -305,7 +305,7 @@ static bool _try_read_from_bucket(cuckoo_hashtable_t* h,
                                   char *val,
                                   size_t i) {
     size_t  j;
-    for (j = 0; j < bucketsize; j ++) {
+    for (j = 0; j < bucketsize; j++) {
 
         if (keycmp((char*) &TABLE_KEY(h, i, j), key)) {
             memcpy(val, (char*) &TABLE_VAL(h, i, j), sizeof(ValType));
@@ -331,7 +331,7 @@ static bool _try_add_to_bucket(cuckoo_hashtable_t* h,
                                size_t i,
                                size_t keylock) {
     size_t j;
-    for (j = 0; j < bucketsize; j ++) {
+    for (j = 0; j < bucketsize; j++) {
         if (is_slot_empty(h, i, j)) {
 
             incr_keyver(h, keylock);
@@ -339,7 +339,7 @@ static bool _try_add_to_bucket(cuckoo_hashtable_t* h,
             memcpy(&TABLE_KEY(h, i, j), key, sizeof(KeyType));
             memcpy(&TABLE_VAL(h, i, j), val, sizeof(ValType));
 
-            h->hashitems ++;
+            h->hashitems++;
 
             incr_keyver(h, keylock);
             return true;
@@ -365,7 +365,7 @@ static bool _try_del_from_bucket(cuckoo_hashtable_t* h,
                                  size_t i,
                                  size_t keylock) {
     size_t j;
-    for (j = 0; j < bucketsize; j ++) {
+    for (j = 0; j < bucketsize; j++) {
 
         if (keycmp((char*) &TABLE_KEY(h, i, j), key)) {
 
@@ -479,10 +479,10 @@ static cuckoo_status _cuckoo_delete(cuckoo_hashtable_t* h,
 static void _cuckoo_clean(cuckoo_hashtable_t* h, size_t size) {
     size_t i, j, ii;
 
-    for (ii = 0; ii < size; ++ii) {
+    for (ii = 0; ii < size; ii++) {
         i = h->cleaned_buckets;
         uint32_t hv;
-        for (j = 0; j < bucketsize; j ++) {
+        for (j = 0; j < bucketsize; j++) {
             if (TABLE_KEY(h, i, j) == 0) {
                 continue;
             }
@@ -496,7 +496,7 @@ static void _cuckoo_clean(cuckoo_hashtable_t* h, size_t size) {
                 TABLE_VAL(h, i, j) = 0;
             }
         }
-        h->cleaned_buckets ++;
+        h->cleaned_buckets++;
         if (h->cleaned_buckets == hashsize((h->hashpower))) {
             h->expanding = false;
             DBG("table clean done, cleaned_buckets = %zu\n", h->cleaned_buckets);
@@ -649,7 +649,7 @@ cuckoo_status cuckoo_expand(cuckoo_hashtable_t* h) {
 
 
     h->buckets = new_buckets;
-    h->hashpower ++;
+    h->hashpower++;
     h->cleaned_buckets = 0;
 
     //h->expanding = false;
