@@ -59,12 +59,15 @@ Bucket;
  *  @brief Atomic read the counter
  *
  */
-#define start_read_keyver(h, idx, result)                                      \
-    result = __sync_fetch_and_add(&((uint32_t*) h->keyver_array)[idx & keyver_mask], 0)
+#define start_read_keyver(h, idx, result)                                   \
+    do { \
+      result = *(volatile uint32_t *)(&((uint32_t*) h->keyver_array)[idx & keyver_mask]); \
+      __asm__ __volatile__("" ::: "memory"); \
+    } while(0)
 
 #define end_read_keyver(h, idx, result)                                \
     do { __asm__ __volatile__("" ::: "memory");  \
-    result = ((uint32_t*) h->keyver_array)[idx & keyver_mask]; \
+      result = *(volatile uint32_t *)(&((uint32_t*) h->keyver_array)[idx & keyver_mask]); \
     } while (0)
 
 /**
@@ -72,13 +75,14 @@ Bucket;
  *
  */
 #define start_incr_keyver(h, idx)                                      \
-    do { ((uint32_t *)h->keyver_array)[idx & keyver_mask] += 1; \
+    do { ((volatile uint32_t *)h->keyver_array)[idx & keyver_mask] += 1; \
     __asm__ __volatile__("" ::: "memory"); \
        } while(0)
 
 #define end_incr_keyver(h, idx)                                      \
     do { \
-    __sync_fetch_and_add(&((uint32_t*) h->keyver_array)[idx & keyver_mask], 1); \
+    __asm__ __volatile__("" ::: "memory"); \
+    ((volatile uint32_t*) h->keyver_array)[idx & keyver_mask] += 1; \
     } while(0)
 
 
