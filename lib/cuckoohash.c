@@ -85,6 +85,7 @@ Bucket;
     do {                                                                \
         __asm__ __volatile__("" ::: "memory");                          \
         ((volatile uint32_t*) h->keyver_array)[idx & keyver_mask] += 1; \
+	__asm__ __volatile("mfence" ::: "memory");                      \
     } while(0)
 
 
