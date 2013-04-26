@@ -31,12 +31,13 @@
 
 
 /*
- * the structure of a bucket
+ * the structure of every two buckets
  */
 #define bucketsize 4
 typedef struct {
-    KeyType keys[bucketsize];
-    ValType vals[bucketsize];
+    uint8_t   valid;
+    KeyType keys[bucketsize * 2];
+    ValType vals[bucketsize * 2];
 }  __attribute__((__packed__))
 Bucket;
 
@@ -91,7 +92,7 @@ Bucket;
 // the current code will call pthread_mutex_unlock before returning
 // to the caller;  pthread_mutex_unlock is a memory barrier:
 // http://www.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap04.html#tag_04_11
-// __asm__ __volatile("mfence" ::: "memory");                      \
+// __asm__ __volatile("mfence" ::: "memory");                     
 
 
 static inline  uint32_t _hashed_key(const char* key) {
@@ -101,6 +102,7 @@ static inline  uint32_t _hashed_key(const char* key) {
 #define hashsize(n) ((uint32_t) 1 << n)
 #define hashmask(n) (hashsize(n) - 1)
 
+#define tablesize(h)  (hashsize(h->hashpower) * sizeof(Bucket) / 2)
 
 
 /**
@@ -148,15 +150,40 @@ static inline size_t _lock_index(const uint32_t hv) {
 }
 
 
-#define TABLE_KEY(h, i, j) ((Bucket*) h->buckets)[i].keys[j]
-#define TABLE_VAL(h, i, j) ((Bucket*) h->buckets)[i].vals[j]
+#define TABLE_KEY(h, i, j) ((Bucket*) h->buckets)[i >> 1].keys[bucketsize * (i & 1) + j]
+#define TABLE_VAL(h, i, j) ((Bucket*) h->buckets)[i >> 1].vals[bucketsize * (i & 1) + j]
+
+static uint8_t valid_op[] = {0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80};
+static uint8_t invalid_op[] = {0xfe, 0xfd, 0xfb, 0xf7, 0xef, 0xdf, 0xbf, 0x7f};
+
+#define SLOT_VALIDATE(h, i, j)                                   \
+    do {                                                    \
+        size_t offset = bucketsize * (i & 1) + j;           \
+        ((Bucket*) h->buckets)[i >> 1].valid |= valid_op[offset]; \
+    } while(0)
+
+#define SLOT_INVALIDATE(h, i, j)                                 \
+    do {                                                    \
+        size_t offset = bucketsize * (i & 1) + j;           \
+        ((Bucket*) h->buckets)[i >> 1].valid &= invalid_op[offset]; \
+    } while(0)
+
+#define IS_SLOT_VALID(h, i, j)                                   \
+    ((((Bucket*) h->buckets)[i >> 1].valid) & valid_op[bucketsize * (i & 1) + j]) == 0
+
+
+
 
 
 //#define IS_SLOT_EMPTY(h, i, j) (TABLE_KEY(h, i, j)==0)
 static inline bool is_slot_empty(cuckoo_hashtable_t* h,
                                  size_t i,
                                  size_t j) {
-    if (TABLE_KEY(h, i, j)==0) {
+    /* if (TABLE_KEY(h, i, j)==0) { */
+    /*     return true; */
+    /* } */
+
+    if (IS_SLOT_VALID(h, i, j)) {
         return true;
     }
 
@@ -167,7 +194,9 @@ static inline bool is_slot_empty(cuckoo_hashtable_t* h,
         size_t i1 = _index_hash(h, hv);
         size_t i2 = _alt_index(h, hv, i1);
         if ((i != i1) && (i != i2)) {
-            TABLE_KEY(h, i, j)=0;
+
+            SLOT_INVALIDATE(h, i, j);
+            //TABLE_KEY(h, i, j)=0;
             return true;
         }
     }
@@ -278,8 +307,12 @@ static int _cuckoopath_move(cuckoo_hashtable_t* h,
 
         TABLE_KEY(h, i2, j2) = TABLE_KEY(h, i1, j1);
         TABLE_VAL(h, i2, j2) = TABLE_VAL(h, i1, j1);
-        TABLE_KEY(h, i1, j1) = 0;
-        TABLE_VAL(h, i1, j1) = 0;
+
+        SLOT_VALIDATE(h, i2, j2);
+        SLOT_INVALIDATE(h, i1, j1);
+
+        /* TABLE_KEY(h, i1, j1) = 0; */
+        /* TABLE_VAL(h, i1, j1) = 0; */
 
         end_incr_keyver(h, keylock);
 
@@ -379,6 +412,8 @@ static bool _try_add_to_bucket(cuckoo_hashtable_t* h,
             memcpy(&TABLE_KEY(h, i, j), key, sizeof(KeyType));
             memcpy(&TABLE_VAL(h, i, j), val, sizeof(ValType));
 
+            SLOT_VALIDATE(h, i, j);
+
             end_incr_keyver(h, keylock);
             h->hashitems++;
             return true;
@@ -409,8 +444,9 @@ static bool _try_del_from_bucket(cuckoo_hashtable_t* h,
 
             start_incr_keyver(h, keylock);
 
-            TABLE_KEY(h, i, j) = 0;
-            TABLE_VAL(h, i, j) = 0;
+            SLOT_INVALIDATE(h, i, j);
+            /* TABLE_KEY(h, i, j) = 0; */
+            /* TABLE_VAL(h, i, j) = 0; */
 
             end_incr_keyver(h, keylock);
             h->hashitems --;
@@ -530,8 +566,9 @@ static void _cuckoo_clean(cuckoo_hashtable_t* h, size_t size) {
             if ((i != i1) && (i != i2)) {
                 //DBG("delete key %u , i=%zu i1=%zu i2=%zu\n", TABLE_KEY(h, i, j), i, i1, i2);
 
-                TABLE_KEY(h, i, j) = 0;
-                TABLE_VAL(h, i, j) = 0;
+                SLOT_INVALIDATE(h, i, h);
+                /* TABLE_KEY(h, i, j) = 0; */
+                /* TABLE_VAL(h, i, j) = 0; */
             }
         }
         h->cleaned_buckets++;
@@ -560,7 +597,7 @@ cuckoo_hashtable_t* cuckoo_init(const int hashtable_init) {
     h->expanding  = false;
     pthread_mutex_init(&h->lock, NULL);
 
-    h->buckets = malloc(hashsize(h->hashpower) * sizeof(Bucket));
+    h->buckets = malloc(tablesize(h));
     if (! h->buckets) {
         fprintf(stderr, "Failed to init hashtable.\n");
         goto Cleanup;
@@ -573,7 +610,7 @@ cuckoo_hashtable_t* cuckoo_init(const int hashtable_init) {
     }
 
 
-    memset(h->buckets, 0, hashsize(h->hashpower) * sizeof(Bucket));
+    memset(h->buckets, 0, tablesize(h));
     memset(h->keyver_array, 0, keyver_count * sizeof(uint32_t));
 
     return h;
@@ -676,15 +713,16 @@ cuckoo_status cuckoo_expand(cuckoo_hashtable_t* h) {
     h->expanding = true;
 
     Bucket* old_buckets = (Bucket*) h->buckets;
-    Bucket* new_buckets = (Bucket*) malloc(hashsize((h->hashpower + 1)) * sizeof(Bucket));
+    Bucket* new_buckets = (Bucket*) malloc(tablesize(h) * 2);
     if (!new_buckets) {
         h->expanding = false;
         mutex_unlock(&h->lock);
         return failure_space_not_enough;
     }
 
-    memcpy(new_buckets, h->buckets, hashsize(h->hashpower) * sizeof(Bucket));
-    memcpy(new_buckets + hashsize(h->hashpower), h->buckets, hashsize(h->hashpower) * sizeof(Bucket));
+
+    memcpy(new_buckets, h->buckets, tablesize(h));
+    memcpy(new_buckets + tablesize(h), h->buckets, tablesize(h));
 
 
     h->buckets = new_buckets;
@@ -703,10 +741,8 @@ cuckoo_status cuckoo_expand(cuckoo_hashtable_t* h) {
 
 void cuckoo_report(cuckoo_hashtable_t* h) {
 
-    size_t sz;
-    sz = sizeof(Bucket) * hashsize(h->hashpower);
     DBG("total number of items %zu\n", h->hashitems);
-    DBG("total size %zu Bytes, or %.2f MB\n", sz, (float) sz / (1 <<20));
+    DBG("total size %zu Bytes, or %.2f MB\n", tablesize(h), (float) tablesize(h) / (1 <<20));
     DBG("load factor %.4f\n", 1.0 * h->hashitems / bucketsize / hashsize(h->hashpower));
 }
 
