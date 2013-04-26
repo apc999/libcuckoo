@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <string.h>
 #include <pthread.h>
+#include <unistd.h>
 #include <math.h>
 #include <sys/time.h>
 #include <algorithm>
