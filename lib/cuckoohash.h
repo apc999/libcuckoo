@@ -57,7 +57,7 @@ typedef struct {
      *  we keep keyver_count = 8192
      *
      */
-    void* keyver_array;
+    void* counters;
 
     /* the mutex to serialize insert, delete, expand */
     pthread_mutex_t lock;
