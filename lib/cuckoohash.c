@@ -38,9 +38,8 @@
  */
 #define bucketsize 4
 typedef struct {
-    uint8_t   valid;
-    KeyType keys[bucketsize * 2];
-    ValType vals[bucketsize * 2];
+    KeyType keys[bucketsize];
+    ValType vals[bucketsize];
 }  __attribute__((__packed__))
 Bucket;
 
@@ -140,7 +139,7 @@ static inline  uint32_t _hashed_key(const char* key) {
 #define hashsize(n) ((uint32_t) 1 << n)
 #define hashmask(n) (hashsize(n) - 1)
 
-#define tablesize(h)  (hashsize(h->hashpower) * sizeof(Bucket) / 2)
+#define tablesize(h)  (hashsize(h->hashpower) * sizeof(Bucket))
 
 
 /**
@@ -188,28 +187,18 @@ static inline size_t _alt_index(cuckoo_hashtable_t* h,
 /* } */
 
 
-#define TABLE_KEY(h, i, j) ((Bucket*) h->buckets)[i >> 1].keys[bucketsize * (i & 1) + j]
-#define TABLE_VAL(h, i, j) ((Bucket*) h->buckets)[i >> 1].vals[bucketsize * (i & 1) + j]
+#define TABLE_KEY(h, i, j) ((Bucket*) h->buckets)[i].keys[j]
+#define TABLE_VAL(h, i, j) ((Bucket*) h->buckets)[i].vals[j]
 
-static uint8_t valid_op[] = {0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80};
-static uint8_t invalid_op[] = {0xfe, 0xfd, 0xfb, 0xf7, 0xef, 0xdf, 0xbf, 0x7f};
+//static uint8_t valid_op[] = {0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80};
+//static uint8_t invalid_op[] = {0xfe, 0xfd, 0xfb, 0xf7, 0xef, 0xdf, 0xbf, 0x7f};
 
-#define SLOT_VALIDATE(h, i, j)                                   \
-    do {                                                    \
-        size_t offset = bucketsize * (i & 1) + j;           \
-        ((Bucket*) h->buckets)[i >> 1].valid |= valid_op[offset]; \
+#define SLOT_CLEAN(h, i, j)                \
+    do {                                        \
+        TABLE_KEY(h, i, j) = 0;                 \
     } while(0)
 
-#define SLOT_INVALIDATE(h, i, j)                                 \
-    do {                                                    \
-        size_t offset = bucketsize * (i & 1) + j;           \
-        ((Bucket*) h->buckets)[i >> 1].valid &= invalid_op[offset]; \
-    } while(0)
-
-#define IS_SLOT_VALID(h, i, j)                                   \
-    ((((Bucket*) h->buckets)[i >> 1].valid) & valid_op[bucketsize * (i & 1) + j]) == 0
-
-
+#define IS_SLOT_AVAILABLE(h, i, j)   (TABLE_KEY(h, i, j) == 0)
 
 
 
@@ -221,7 +210,7 @@ static inline bool is_slot_empty(cuckoo_hashtable_t* h,
     /*     return true; */
     /* } */
 
-    if (IS_SLOT_VALID(h, i, j)) {
+    if (IS_SLOT_AVAILABLE(h, i, j)) {
         return true;
     }
 
@@ -233,8 +222,7 @@ static inline bool is_slot_empty(cuckoo_hashtable_t* h,
         size_t i2 = _alt_index(h, hv, i1);
         if ((i != i1) && (i != i2)) {
 
-            SLOT_INVALIDATE(h, i, j);
-            //TABLE_KEY(h, i, j)=0;
+            SLOT_CLEAN(h, i, j);
             return true;
         }
     }
@@ -343,11 +331,7 @@ static int _cuckoopath_move(cuckoo_hashtable_t* h,
         TABLE_KEY(h, i2, j2) = TABLE_KEY(h, i1, j1);
         TABLE_VAL(h, i2, j2) = TABLE_VAL(h, i1, j1);
 
-        SLOT_VALIDATE(h, i2, j2);
-        SLOT_INVALIDATE(h, i1, j1);
-
-        /* TABLE_KEY(h, i1, j1) = 0; */
-        /* TABLE_VAL(h, i1, j1) = 0; */
+        SLOT_CLEAN(h, i1, j1);
 
         end_incr_counter2(h, i1, i2);
 
@@ -445,8 +429,6 @@ static bool _try_add_to_bucket(cuckoo_hashtable_t* h,
             memcpy(&TABLE_KEY(h, i, j), key, sizeof(KeyType));
             memcpy(&TABLE_VAL(h, i, j), val, sizeof(ValType));
 
-            SLOT_VALIDATE(h, i, j);
-
             end_incr_counter(h, i);
             h->hashitems++;
             return true;
@@ -474,7 +456,7 @@ static bool _try_del_from_bucket(cuckoo_hashtable_t* h,
         if (keycmp((char*) &TABLE_KEY(h, i, j), key)) {
 
             start_incr_counter(h, i);
-            SLOT_INVALIDATE(h, i, j);
+            SLOT_CLEAN(h, i, j);
             end_incr_counter(h, i);
 
             h->hashitems --;
@@ -585,7 +567,7 @@ static void _cuckoo_clean(cuckoo_hashtable_t* h, size_t size) {
     for (size_t ii = 0; ii < size; ii++) {
         size_t i = h->cleaned_buckets;
         for (size_t j = 0; j < bucketsize; j++) {
-            if (TABLE_KEY(h, i, j) == 0) {
+            if (IS_SLOT_AVAILABLE(h, i, j) == 0) {
                 continue;
             }
             uint32_t hv = _hashed_key((char*) &TABLE_KEY(h, i, j));
@@ -593,7 +575,7 @@ static void _cuckoo_clean(cuckoo_hashtable_t* h, size_t size) {
             size_t i2 = _alt_index(h, hv, i1);
             if ((i != i1) && (i != i2)) {
                 //DBG("delete key %u , i=%zu i1=%zu i2=%zu\n", TABLE_KEY(h, i, j), i, i1, i2);
-                SLOT_INVALIDATE(h, i, j);
+                SLOT_CLEAN(h, i, j);
             }
         }
         h->cleaned_buckets++;
