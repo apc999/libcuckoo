@@ -43,15 +43,10 @@ typedef struct {
 }  __attribute__((__packed__))
 Bucket;
 
-// the old code
-/* #define read_keyver(h, idx)                                      \ */
-/*     __sync_fetch_and_add(&((uint32_t*) h->keyver_array)[idx & keyver_mask], 0) */
 
-/* #define incr_keyver(h, idx)                                      \ */
-/*     __sync_fetch_and_add(&((uint32_t*) h->keyver_array)[idx & keyver_mask], 1) */
-
-#define likely(x)     __builtin_expect(!!(x), 1)
-#define unlikely(x)   __builtin_expect(!!(x), 0)
+#define reorder_barrier() __asm__ __volatile__("" ::: "memory")
+#define likely(x)     __builtin_expect((x), 1)
+#define unlikely(x)   __builtin_expect((x), 0)
 
 /**
  *  @brief read the counter, ensured by x86 memory ordering model
@@ -60,12 +55,12 @@ Bucket;
 #define start_read_counter(h, idx, version)                             \
     do {                                                                \
         version = *(volatile uint32_t *)(&((uint32_t*) h->counters)[idx & counter_mask]); \
-        __asm__ __volatile__("" ::: "memory");                          \
+        reorder_barrier();                                              \
     } while(0)
 
 #define end_read_counter(h, idx, version)                               \
     do {                                                                \
-        __asm__ __volatile__("" ::: "memory");                          \
+        reorder_barrier();                                              \
         version = *(volatile uint32_t *)(&((uint32_t*) h->counters)[idx & counter_mask]); \
     } while (0)
 
@@ -74,12 +69,12 @@ Bucket;
     do {                                                                \
         v1 = *(volatile uint32_t *)(&((uint32_t*) h->counters)[i1 & counter_mask]); \
         v2 = *(volatile uint32_t *)(&((uint32_t*) h->counters)[i2 & counter_mask]); \
-        __asm__ __volatile__("" ::: "memory");                          \
+        reorder_barrier();                                              \
     } while(0)
 
 #define end_read_counter2(h, i1, i2, v1, v2)                            \
     do {                                                                \
-        __asm__ __volatile__("" ::: "memory");                          \
+        reorder_barrier();                                              \
         v1 = *(volatile uint32_t *)(&((uint32_t*) h->counters)[i1 & counter_mask]); \
         v2 = *(volatile uint32_t *)(&((uint32_t*) h->counters)[i2 & counter_mask]); \
     } while (0)
@@ -92,12 +87,12 @@ Bucket;
 #define start_incr_counter(h, idx)                                  \
     do {                                                            \
         ((volatile uint32_t *)h->counters)[idx & counter_mask]++;   \
-        __asm__ __volatile__("" ::: "memory");                      \
+        reorder_barrier();                                          \
     } while(0)
 
 #define end_incr_counter(h, idx)                                    \
     do {                                                            \
-        __asm__ __volatile__("" ::: "memory");                      \
+        reorder_barrier();                                          \
         ((volatile uint32_t*) h->counters)[idx & counter_mask]++;   \
     } while(0)
 
@@ -110,13 +105,13 @@ Bucket;
         } else {                                                        \
             ((volatile uint32_t *)h->counters)[i1 & counter_mask]++;    \
         }                                                               \
-        __asm__ __volatile__("" ::: "memory");                          \
+        reorder_barrier();                                              \
     } while(0)
 
 #define end_incr_counter2(h, i1, i2)                                    \
     do {                                                                \
-        __asm__ __volatile__("" ::: "memory");                          \
-        if (likely((i1 & counter_mask) != (i2 & counter_mask))) {     \
+        reorder_barrier();                                              \
+        if (likely((i1 & counter_mask) != (i2 & counter_mask))) {       \
             ((volatile uint32_t *)h->counters)[i1 & counter_mask]++;    \
             ((volatile uint32_t *)h->counters)[i2 & counter_mask]++;    \
         } else {                                                        \
@@ -175,25 +170,11 @@ static inline size_t _alt_index(cuckoo_hashtable_t* h,
     //return ((hv >> 32) & hashmask(h->hashpower));
 }
 
-/**
- * @brief Compute the index of the corresponding counter in keyver_array
- *
- * @param hv 32-bit hash value of the key
- *
- * @return The index of the counter
- */
-/* static inline size_t _lock_index(const uint32_t hv) { */
-/*     return hv & keyver_mask; */
-/* } */
-
 
 #define TABLE_KEY(h, i, j) ((Bucket*) h->buckets)[i].keys[j]
 #define TABLE_VAL(h, i, j) ((Bucket*) h->buckets)[i].vals[j]
 
-//static uint8_t valid_op[] = {0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80};
-//static uint8_t invalid_op[] = {0xfe, 0xfd, 0xfb, 0xf7, 0xef, 0xdf, 0xbf, 0x7f};
-
-#define SLOT_CLEAN(h, i, j)                \
+#define SLOT_CLEAN(h, i, j)                     \
     do {                                        \
         TABLE_KEY(h, i, j) = 0;                 \
     } while(0)
@@ -202,14 +183,9 @@ static inline size_t _alt_index(cuckoo_hashtable_t* h,
 
 
 
-//#define IS_SLOT_EMPTY(h, i, j) (TABLE_KEY(h, i, j)==0)
 static inline bool is_slot_empty(cuckoo_hashtable_t* h,
                                  size_t i,
                                  size_t j) {
-    /* if (TABLE_KEY(h, i, j)==0) { */
-    /*     return true; */
-    /* } */
-
     if (IS_SLOT_AVAILABLE(h, i, j)) {
         return true;
     }
@@ -220,8 +196,8 @@ static inline bool is_slot_empty(cuckoo_hashtable_t* h,
         uint32_t hv = _hashed_key((char*) &TABLE_KEY(h, i, j));
         size_t i1 = _index_hash(h, hv);
         size_t i2 = _alt_index(h, hv, i1);
-        if ((i != i1) && (i != i2)) {
 
+        if ((i != i1) && (i != i2)) {
             SLOT_CLEAN(h, i, j);
             return true;
         }
@@ -347,17 +323,14 @@ static bool _run_cuckoo(cuckoo_hashtable_t* h,
                         size_t i2,
                         size_t* i) {
 
-    CuckooRecord* cuckoo_path;
-
-    cuckoo_path = malloc(MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
-    if (! cuckoo_path) {
+    CuckooRecord* cuckoo_path = malloc(MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
+    if (!cuckoo_path) {
         fprintf(stderr, "Failed to init cuckoo path.\n");
         return -1;
     }
     memset(cuckoo_path, 0, MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
 
-    size_t idx;
-    for (idx = 0; idx < NUM_CUCKOO_PATH; idx++) {
+    for (size_t idx = 0; idx < NUM_CUCKOO_PATH; idx++) {
         if (idx < NUM_CUCKOO_PATH / 2) {
             cuckoo_path[0].buckets[idx] = i1;
         } else {
@@ -365,10 +338,12 @@ static bool _run_cuckoo(cuckoo_hashtable_t* h,
         }
     }
 
-    size_t num_kicks = 0;
+
     while (1) {
-        int depth;
-        depth = _cuckoopath_search(h, cuckoo_path, &idx, &num_kicks);
+        size_t num_kicks = 0;
+        size_t idx = 0;
+
+        int depth = _cuckoopath_search(h, cuckoo_path, &idx, &num_kicks);
         if (depth < 0) {
             break;
         }
@@ -488,7 +463,7 @@ static cuckoo_status _cuckoo_find(cuckoo_hashtable_t* h,
 TryRead:
     start_read_counter2(h, i1, i2, vs1, vs2);
 
-    if ((vs1 & 1) || (vs2 & 1)) {
+    if (((vs1 & 1) || (vs2 & 1) )) {
         goto TryRead;
     }
 
@@ -499,7 +474,7 @@ TryRead:
 
     end_read_counter2(h, i1, i2, ve1, ve2);
 
-    if ((vs1 != ve1) || (vs2 != ve2)) {
+    if (((vs1 != ve1) || (vs2 != ve2))) {
         goto TryRead;
     }
 
@@ -667,18 +642,18 @@ cuckoo_status cuckoo_insert(cuckoo_hashtable_t* h,
     size_t i2   = _alt_index(h, hv, i1);
 
     ValType oldval;
-    cuckoo_status st;
-
-    st = _cuckoo_find(h, key, (char*) &oldval, i1, i2);
+    cuckoo_status st = _cuckoo_find(h, key, (char*) &oldval, i1, i2);
     if  (st == ok) {
         mutex_unlock(&h->lock);
         return failure_key_duplicated;
     }
 
-    st =  _cuckoo_insert(h, key, val, i1, i2);
+    st = _cuckoo_insert(h, key, val, i1, i2);
 
     if (h->expanding) {
-        // still some work to do
+        //
+        // still some work to do before releasing the lock
+        //
         _cuckoo_clean(h, DEFAULT_BULK_CLEAN);
     }
 
@@ -696,9 +671,7 @@ cuckoo_status cuckoo_delete(cuckoo_hashtable_t* h,
     size_t i1   = _index_hash(h, hv);
     size_t i2   = _alt_index(h, hv, i1);
 
-    cuckoo_status st;
-
-    st = _cuckoo_delete(h, key, i1, i2);
+    cuckoo_status st = _cuckoo_delete(h, key, i1, i2);
 
     mutex_unlock(&h->lock);
 
