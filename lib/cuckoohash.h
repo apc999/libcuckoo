@@ -36,7 +36,7 @@ typedef enum {
 
 
 /*
- * the structure of a buckoo hash table
+ * the structure of a cuckoo hash table
  */
 typedef struct {
 
