@@ -34,7 +34,7 @@ double time_now()
 
 static size_t nq    = 1024; 
 static size_t nt    = 1;
-static size_t power = 19;
+static size_t power = 21;
 static float  duration = 2.0;
 static cuckoo_hashtable_t* table = NULL;
 void usage() {

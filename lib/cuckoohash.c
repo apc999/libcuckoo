@@ -164,7 +164,7 @@ static inline size_t _alt_index(cuckoo_hashtable_t* h,
                                 const size_t index) {
     // 0x5bd1e995 is the hash constant from MurmurHash2
     //uint32_t tag = hv & 0xFF;
-    uint32_t tag = hv >> 24;
+    uint32_t tag = (hv >> 24)+1; // ensure tag is nonzero for the multiply
     return (index ^ (tag * 0x5bd1e995)) & hashmask(h->hashpower);
     //return (hv ^ (tag * 0x5bd1e995)) & hashmask(h->hashpower);
     //return ((hv >> 32) & hashmask(h->hashpower));
@@ -323,10 +323,13 @@ static bool _run_cuckoo(cuckoo_hashtable_t* h,
                         size_t i2,
                         size_t* i) {
 
-    CuckooRecord* cuckoo_path = malloc(MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
-    if (!cuckoo_path) {
-        fprintf(stderr, "Failed to init cuckoo path.\n");
-        return -1;
+    static __thread CuckooRecord* cuckoo_path = NULL;
+    if (!cuckoo_path) { 
+	cuckoo_path = malloc(MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
+        if (!cuckoo_path) {
+            fprintf(stderr, "Failed to init cuckoo path.\n");
+            return -1;
+        }
     }
     memset(cuckoo_path, 0, MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
 
@@ -351,11 +354,9 @@ static bool _run_cuckoo(cuckoo_hashtable_t* h,
         int curr_depth = _cuckoopath_move(h, cuckoo_path, depth, idx);
         if (curr_depth == 0) {
             *i = cuckoo_path[0].buckets[idx];
-            free(cuckoo_path);
             return true;
         }
     }
-    free(cuckoo_path);
     return false;
 }
 
