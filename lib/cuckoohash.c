@@ -120,7 +120,7 @@ Bucket;
     } while(0)
 
 
-// dga does not thing we need this mfence in end_incr, because
+// dga does not think we need this mfence in end_incr, because
 // the current code will call pthread_mutex_unlock before returning
 // to the caller;  pthread_mutex_unlock is a memory barrier:
 // http://www.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap04.html#tag_04_11
