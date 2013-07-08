@@ -42,25 +42,24 @@ class CuckooHashTable(object):
         return (False, None)
 
 
-    def search_path(self, start_t, start_k):
+    def search_path(self,  start_buckets):
         q = Queue.Queue()
-        for j in range(slots_per_bucket):
-            q.put([(start_k, j)])
-            assert(self.table[start_k][j] != None)
+        for i in start_buckets:
+            for j in range(slots_per_bucket):
+                q.put([(i, j)])
+                assert(self.table[i][j] != None)
         nchecked = 0
 
         while not q.empty():
             path = q.get()
-
             (i, j) = path[-1]
             (key_t, key) = self.table[i][j]
             if (key_t == 1):
                 # try to extend cuckoo path on a cheap key
-                ii = (key + search_range) 
-                next = None
-                while (ii > key):
-                    i = ii & (self.num_buckets - 1)
+                ii = key + 1
+                while (ii <= key  + search_range):
                     nchecked += 1
+                    i = ii & (self.num_buckets - 1)
                     for j in range(slots_per_bucket):
                         if self.table[i][j] == None:
                             newpath = list(path)
@@ -73,9 +72,8 @@ class CuckooHashTable(object):
                             newpath = list(path)
                             newpath.append((i, j))
                             q.put(newpath)
-                    ii -= 1
+                    ii += 1
                                          
-                                          
             else:
                 # try to extend cuckoo path on an expensive key
                 nchecked += 1
@@ -108,8 +106,7 @@ class CuckooHashTable(object):
                     return True
                 i = (i + 1) & (self.num_buckets - 1)
 
-            start_t = 1
-            start_k = key
+            start_buckets = [key]
 
         else:
             # this is an 'expensive' key
@@ -129,11 +126,10 @@ class CuckooHashTable(object):
                 self.num_keys += 1
                 return True
             
-            start_t = 2
-            start_k = i1
+            start_buckets = [i1, i2]
 
         
-        path = self.search_path(start_t, start_k)
+        path = self.search_path(start_buckets)
         if path == []:
             return False
 
@@ -144,6 +140,7 @@ class CuckooHashTable(object):
             next = self.table[i][j]
             self.table[i][j] = cur
             cur  = next
+        assert(cur == None)
         self.num_keys += 1
         return True
 
