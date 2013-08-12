@@ -25,7 +25,7 @@ AC_DISABLE_SHARED
 AC_PROG_LIBTOOL
 
 # Checks for libraries.
-#AC_CHECK_LIB([pthread], [pthread_mutex_init], [], [echo "pthreads not found.  Please install pthread library before proceeding"; exit -1])
+AC_CHECK_LIB([pthread], [pthread_mutex_init], [], [echo "pthreads not found.  Please install pthread library before proceeding"; exit -1])
 
 # Checks for typedefs, structures, and compiler characteristics.
 AC_HEADER_STDBOOL
