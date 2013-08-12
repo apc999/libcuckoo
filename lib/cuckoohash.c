@@ -322,15 +322,19 @@ static bool _run_cuckoo(cuckoo_hashtable_t* h,
                         size_t i1,
                         size_t i2,
                         size_t* i) {
-
+#ifdef __linux__
     static __thread CuckooRecord* cuckoo_path = NULL;
+#else
+    CuckooRecord* cuckoo_path = NULL;
+#endif
     if (!cuckoo_path) { 
-	cuckoo_path = malloc(MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
+        cuckoo_path = malloc(MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
         if (!cuckoo_path) {
             fprintf(stderr, "Failed to init cuckoo path.\n");
             return -1;
         }
     }
+
     memset(cuckoo_path, 0, MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
 
     for (size_t idx = 0; idx < NUM_CUCKOO_PATH; idx++) {
