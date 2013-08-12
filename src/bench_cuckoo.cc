@@ -63,8 +63,9 @@ void* exec_thread(void* p) {
     tp->hits = 0;
     tp->gets = 0;
     tp->puts = 0;
+#ifdef __linux__
     tp->cpu =  sched_getcpu();
-
+#endif
     size_t   w     = nq / nt;
     size_t*  q     = tp->queries + w * tp->tid;
     size_t   total = 0;

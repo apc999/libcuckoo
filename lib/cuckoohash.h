@@ -51,56 +51,57 @@ typedef struct {
 
 
 
-/** 
+/**
  * @brief Initialize the hash table
- * 
- * @param h handler to the hash table
- * @param hashtable_init The logarithm of the initial table size
  *
- * @return handler to the hashtable on success, NULL on failure
+ * @param h handler to the hash table
+ * @param hashtable_init logarithm of the initial table size
+ *
+ * @return handler to a cuckoo hash table structure on success,
+ *         NULL on failure
  */
 cuckoo_hashtable_t* cuckoo_init(const int hashpower_init);
 
-/** 
+/**
  * @brief Cleanup routine
- * 
+ *
  */
 cuckoo_status cuckoo_exit(cuckoo_hashtable_t* h);
 
 
-/** 
+/**
  * @brief Lookup key in the hash table
- * 
+ *
  * @param h handler to the hash table
  *
- * @param key key to search 
+ * @param key key to search
  * @param val value to return
- * 
+ *
  * @return ok if key is found, not_found otherwise
  */
 cuckoo_status cuckoo_find(cuckoo_hashtable_t* h, const char *key, char *val);
 
 
 
-/** 
+/**
  * @brief Insert key/value to cuckoo hash table
- * 
- *  Inserting new key/value pair. 
+ *
+ *  Inserting new key/value pair.
  *  If the key is already inserted, the new value will not be inserted
  *
  *
  * @param h handler to the hash table
  * @param key key to be inserted
  * @param val value to be inserted
- * 
+ *
  * @return ok if key/value are succesfully inserted
  */
 cuckoo_status cuckoo_insert(cuckoo_hashtable_t* h, const char *key, const char* val);
 
 
-/** 
+/**
  * @brief Delete key/value from cuckoo hash table
- * 
+ *
  * @param h handler to the hash table
  * @param key key to be deleted
  *
@@ -109,9 +110,9 @@ cuckoo_status cuckoo_insert(cuckoo_hashtable_t* h, const char *key, const char* 
 cuckoo_status cuckoo_delete(cuckoo_hashtable_t* h, const char *key);
 
 
-/** 
+/**
  * @brief Grow the hash table to the next power of 2
- * 
+ *
  * @param h handler to the hash table
  *
  * @return ok if table is succesfully expanded, not_enough_space if no space to expand
@@ -119,22 +120,22 @@ cuckoo_status cuckoo_delete(cuckoo_hashtable_t* h, const char *key);
 cuckoo_status cuckoo_expand(cuckoo_hashtable_t* h);
 
 
-/** 
+/**
  * @brief Print stats of this hash table
- * 
+ *
  * @param h handler to the hash table
- * 
+ *
  * @return Void
  */
 void cuckoo_report(cuckoo_hashtable_t* h);
 
 
 
-/** 
+/**
  * @brief Return the load factor of this hash table
- * 
+ *
  * @param h handler to the hash table
- * 
+ *
  * @return load factor
  */
 float cuckoo_loadfactor(cuckoo_hashtable_t* h);

@@ -140,7 +140,7 @@ Bucket;
 // the current code will call pthread_mutex_unlock before returning
 // to the caller;  pthread_mutex_unlock is a memory barrier:
 // http://www.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap04.html#tag_04_11
-// __asm__ __volatile("mfence" ::: "memory");                     
+// __asm__ __volatile("mfence" ::: "memory");
 
 
 static inline  uint32_t _hashed_key(const char* key) {
@@ -178,12 +178,9 @@ static inline size_t _index_hash(cuckoo_hashtable_t* h,
 static inline size_t _alt_index(cuckoo_hashtable_t* h,
                                 const uint32_t hv,
                                 const size_t index) {
-    // 0x5bd1e995 is the hash constant from MurmurHash2
-    //uint32_t tag = hv & 0xFF;
     uint32_t tag = (hv >> 24)+1; // ensure tag is nonzero for the multiply
+    /* 0x5bd1e995 is the hash constant from MurmurHash2 */
     return (index ^ (tag * 0x5bd1e995)) & hashmask(h->hashpower);
-    //return (hv ^ (tag * 0x5bd1e995)) & hashmask(h->hashpower);
-    //return ((hv >> 32) & hashmask(h->hashpower));
 }
 
 
@@ -221,16 +218,12 @@ static inline bool is_slot_empty(cuckoo_hashtable_t* h,
     return false;
 }
 
-
-
 typedef struct  {
     size_t buckets[NUM_CUCKOO_PATH];
     size_t slots[NUM_CUCKOO_PATH];
     KeyType keys[NUM_CUCKOO_PATH];
 }  __attribute__((__packed__))
 CuckooRecord;
-
-
 
 /**
  * @brief Make bucket from[idx] slot[whichslot] available to insert a new item
@@ -327,7 +320,7 @@ static int _cuckoopath_move(cuckoo_hashtable_t* h,
 
         end_incr_counter2(h, i1, i2);
 
-        depth --;
+        depth--;
     }
 
     return depth;
@@ -341,13 +334,17 @@ static bool _run_cuckoo(cuckoo_hashtable_t* h,
 #ifdef __linux__
     static __thread CuckooRecord* cuckoo_path = NULL;
 #else
+    /*
+     * TLS is not supported by default GCC on MacOS
+     * malloc and free cuckoo_path on every call
+     */
     CuckooRecord* cuckoo_path = NULL;
 #endif
-    if (!cuckoo_path) { 
+    if (!cuckoo_path) {
         cuckoo_path = malloc(MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
         if (!cuckoo_path) {
             fprintf(stderr, "Failed to init cuckoo path.\n");
-            return -1;
+            return false;
         }
     }
 
@@ -361,8 +358,8 @@ static bool _run_cuckoo(cuckoo_hashtable_t* h,
         }
     }
 
-
-    while (1) {
+    bool done = false;
+    while (!done) {
         size_t num_kicks = 0;
         size_t idx = 0;
 
@@ -372,12 +369,19 @@ static bool _run_cuckoo(cuckoo_hashtable_t* h,
         }
 
         int curr_depth = _cuckoopath_move(h, cuckoo_path, depth, idx);
-        if (curr_depth == 0) {
+        if (0 == curr_depth) {
             *i = cuckoo_path[0].buckets[idx];
-            return true;
+            done = true;
+            break;
         }
     }
-    return false;
+
+#ifdef __linux__
+#else
+    free(cuckoo_path);
+#endif
+
+    return done;
 }
 
 
@@ -439,7 +443,7 @@ static bool _try_add_to_bucket(cuckoo_hashtable_t* h,
 /**
  * @brief Try to delete key and its corresponding value from bucket i,
  *
- * @param key Pointer to the key to store
+ * @param key handler to the key to store
  * @param i Bucket index
 
  * @return true if key is found, false otherwise
@@ -455,7 +459,7 @@ static bool _try_del_from_bucket(cuckoo_hashtable_t* h,
             SLOT_CLEAN(h, i, j);
             end_incr_counter(h, i);
 
-            h->hashitems --;
+            h->hashitems--;
             return true;
         }
     }
@@ -466,10 +470,10 @@ static bool _try_del_from_bucket(cuckoo_hashtable_t* h,
 /**
  * @brief internal of cuckoo_find
  *
- * @param key
- * @param val
- * @param i1
- * @param i2
+ * @param key handler to the key to search
+ * @param val handler to the value to return
+ * @param i1  1st bucket index
+ * @param i2  2nd bucket index
  *
  * @return
  */
@@ -528,7 +532,7 @@ static cuckoo_status _cuckoo_insert(cuckoo_hashtable_t* h,
      * we are unlucky, so let's perform cuckoo hashing
      */
     size_t i = 0;
-            
+
     if (_run_cuckoo(h, i1, i2, &i)) {
         if (_try_add_to_bucket(h, key, val, i)) {
             return ok;
@@ -640,9 +644,9 @@ cuckoo_status cuckoo_find(cuckoo_hashtable_t* h,
                           const char *key,
                           char *val) {
 
-    uint32_t hv    = _hashed_key(key);
-    size_t i1      = _index_hash(h, hv);
-    size_t i2      = _alt_index(h, hv, i1);
+    uint32_t hv = _hashed_key(key);
+    size_t i1   = _index_hash(h, hv);
+    size_t i2   = _alt_index(h, hv, i1);
 
     cuckoo_status st = _cuckoo_find(h, key, val, i1, i2);
 
@@ -656,13 +660,14 @@ cuckoo_status cuckoo_find(cuckoo_hashtable_t* h,
 cuckoo_status cuckoo_insert(cuckoo_hashtable_t* h,
                             const char *key,
                             const char* val) {
-    mutex_lock(&h->lock);
 
     uint32_t hv = _hashed_key(key);
     size_t i1   = _index_hash(h, hv);
     size_t i2   = _alt_index(h, hv, i1);
-
     ValType oldval;
+
+    mutex_lock(&h->lock);
+
     cuckoo_status st = _cuckoo_find(h, key, (char*) &oldval, i1, i2);
     if  (st == ok) {
         mutex_unlock(&h->lock);
@@ -686,11 +691,11 @@ cuckoo_status cuckoo_insert(cuckoo_hashtable_t* h,
 cuckoo_status cuckoo_delete(cuckoo_hashtable_t* h,
                             const char *key) {
 
-    mutex_lock(&h->lock);
-
     uint32_t hv = _hashed_key(key);
     size_t i1   = _index_hash(h, hv);
     size_t i2   = _alt_index(h, hv, i1);
+
+    mutex_lock(&h->lock);
 
     cuckoo_status st = _cuckoo_delete(h, key, i1, i2);
 
@@ -707,7 +712,7 @@ cuckoo_status cuckoo_expand(cuckoo_hashtable_t* h) {
         //DBG("expansion is on-going\n", NULL);
         return failure_under_expansion;
     }
-    
+
     h->expanding = true;
 
     Bucket* old_buckets = (Bucket*) h->buckets;
