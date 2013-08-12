@@ -9,6 +9,22 @@
  *
  */
 
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/signal.h>
+#include <sys/resource.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+#include <pthread.h>
+
+#include "config.h"
+#include "city.h"
+#include "util.h"
 #include "cuckoohash.h"
 
 /*

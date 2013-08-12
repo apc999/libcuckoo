@@ -1,26 +1,7 @@
 #ifndef _CUCKOOHASH_H
 #define _CUCKOOHASH_H
 
-#include <sys/stat.h>
-#include <sys/socket.h>
-#include <sys/signal.h>
-#include <sys/resource.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <errno.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <assert.h>
-#include <pthread.h>
-
-
-
-#include "config.h"
 #include "cuckoohash_config.h"
-//#include "hash.h"
-#include "city.h"
-#include "util.h"
 
 typedef enum {
     ok = 0,
@@ -32,8 +13,6 @@ typedef enum {
     failure_table_full = 6,
     failure_under_expansion = 7,
 } cuckoo_status;
-
-
 
 /*
  * the structure of a cuckoo hash table
