@@ -111,6 +111,18 @@ cuckoo_status cuckoo_delete(cuckoo_hashtable_t* h, const char *key);
 
 
 /**
+ * @brief Update key/value in cuckoo hash table
+ *
+ * @param h handler to the hash table
+ * @param key key to be update
+ * @param val new value 
+ *
+ * @return ok if key is succesfully updated, not_found if the key is not present
+ */
+cuckoo_status cuckoo_update(cuckoo_hashtable_t* h, const char *key, const char* val);
+
+
+/**
  * @brief Grow the hash table to the next power of 2
  *
  * @param h handler to the hash table

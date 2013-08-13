@@ -324,18 +324,17 @@ static int _cuckoopath_move(cuckoo_hashtable_t* h,
     }
 
     return depth;
-
 }
 
 static bool _run_cuckoo(cuckoo_hashtable_t* h,
-                        size_t i1,
-                        size_t i2,
+                        const size_t i1,
+                        const size_t i2,
                         size_t* i) {
 #ifdef __linux__
     static __thread CuckooRecord* cuckoo_path = NULL;
 #else
     /*
-     * TLS is not supported by default GCC on MacOS
+     * "__thread" is not supported by default on MacOS
      * malloc and free cuckoo_path on every call
      */
     CuckooRecord* cuckoo_path = NULL;
@@ -480,8 +479,8 @@ static bool _try_del_from_bucket(cuckoo_hashtable_t* h,
 static cuckoo_status _cuckoo_find(cuckoo_hashtable_t* h,
                                   const char *key,
                                   char *val,
-                                  size_t i1,
-                                  size_t i2) {
+                                  const size_t i1,
+                                  const size_t i2) {
     bool result;
 
     uint32_t vs1, vs2, ve1, ve2;
@@ -510,11 +509,14 @@ TryRead:
     }
 }
 
+/*
+ * the lock is acquired by the caller
+ */
 static cuckoo_status _cuckoo_insert(cuckoo_hashtable_t* h,
                                     const char* key,
                                     const char* val,
-                                    size_t i1,
-                                    size_t i2) {
+                                    const size_t i1,
+                                    const size_t i2) {
 
     /*
      * try to add new key to bucket i1 first, then try bucket i2
@@ -547,10 +549,13 @@ static cuckoo_status _cuckoo_insert(cuckoo_hashtable_t* h,
 
 }
 
+/*
+ * the lock is acquired by the caller
+ */
 static cuckoo_status _cuckoo_delete(cuckoo_hashtable_t* h,
                                     const char* key,
-                                    size_t i1,
-                                    size_t i2) {
+                                    const size_t i1,
+                                    const size_t i2) {
     if (_try_del_from_bucket(h, key, i1)) {
         return ok;
     }
@@ -560,10 +565,34 @@ static cuckoo_status _cuckoo_delete(cuckoo_hashtable_t* h,
     }
 
     return failure_key_not_found;
-
 }
 
-static void _cuckoo_clean(cuckoo_hashtable_t* h, size_t size) {
+
+/*
+ * the lock is acquired by the caller
+ */
+static cuckoo_status _cuckoo_update(cuckoo_hashtable_t* h,
+                                    const char* key,
+                                    const char* val,
+                                    const size_t i1,
+                                    const size_t i2) {
+    cuckoo_status st;
+
+    st = _cuckoo_delete(h, key, i1, i2);
+    if (ok != st) {
+        return st;
+    }
+
+    st = _cuckoo_insert(h, key, val, i1, i2);
+
+    return st;
+}
+
+/*
+ * the lock is acquired by the caller
+ */
+static void _cuckoo_clean(cuckoo_hashtable_t* h,
+                          const size_t size) {
     for (size_t ii = 0; ii < size; ii++) {
         size_t i = h->cleaned_buckets;
         for (size_t j = 0; j < bucketsize; j++) {
@@ -645,8 +674,8 @@ cuckoo_status cuckoo_find(cuckoo_hashtable_t* h,
                           char *val) {
 
     uint32_t hv = _hashed_key(key);
-    size_t i1   = _index_hash(h, hv);
-    size_t i2   = _alt_index(h, hv, i1);
+    size_t   i1 = _index_hash(h, hv);
+    size_t   i2 = _alt_index(h, hv, i1);
 
     cuckoo_status st = _cuckoo_find(h, key, val, i1, i2);
 
@@ -662,14 +691,14 @@ cuckoo_status cuckoo_insert(cuckoo_hashtable_t* h,
                             const char* val) {
 
     uint32_t hv = _hashed_key(key);
-    size_t i1   = _index_hash(h, hv);
-    size_t i2   = _alt_index(h, hv, i1);
+    size_t   i1 = _index_hash(h, hv);
+    size_t   i2 = _alt_index(h, hv, i1);
     ValType oldval;
 
     mutex_lock(&h->lock);
 
     cuckoo_status st = _cuckoo_find(h, key, (char*) &oldval, i1, i2);
-    if  (st == ok) {
+    if (st == ok) {
         mutex_unlock(&h->lock);
         return failure_key_duplicated;
     }
@@ -692,12 +721,30 @@ cuckoo_status cuckoo_delete(cuckoo_hashtable_t* h,
                             const char *key) {
 
     uint32_t hv = _hashed_key(key);
-    size_t i1   = _index_hash(h, hv);
-    size_t i2   = _alt_index(h, hv, i1);
+    size_t   i1 = _index_hash(h, hv);
+    size_t   i2 = _alt_index(h, hv, i1);
 
     mutex_lock(&h->lock);
 
     cuckoo_status st = _cuckoo_delete(h, key, i1, i2);
+
+    mutex_unlock(&h->lock);
+
+    return st;
+}
+
+
+cuckoo_status cuckoo_update(cuckoo_hashtable_t* h,
+                            const char *key,
+                            const char *val) {
+
+    uint32_t hv = _hashed_key(key);
+    size_t   i1 = _index_hash(h, hv);
+    size_t   i2 = _alt_index(h, hv, i1);
+
+    mutex_lock(&h->lock);
+
+    cuckoo_status st = _cuckoo_update(h, key, val, i1, i2);
 
     mutex_unlock(&h->lock);
 
