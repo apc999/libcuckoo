@@ -29,7 +29,11 @@
 
 extern "C" {
 #include "cuckoohash.h"
+#include "cuckoohash_config.h" // for SLOT_PER_BUCKET
 }
+
+typedef uint32_t KeyType;
+typedef uint32_t ValType;
 
 #define million 1000000
 #define VALUE(key) (3*key-15)
@@ -235,7 +239,7 @@ int main(int argc, char** argv)
     task_init(total);
 
     printf("initializing hash table with power=%zu\n", power);
-    table = cuckoo_init(power);
+    table = cuckoo_init(power, sizeof(KeyType), sizeof(ValType));
     cuckoo_report(table);
 
     pthread_t* readers = new pthread_t[num_readers];

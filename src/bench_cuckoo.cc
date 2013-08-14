@@ -19,6 +19,9 @@ extern "C" {
 #include "cuckoohash.h"
 }
 
+typedef uint32_t KeyType;
+typedef uint32_t ValType;
+
 
 using namespace std;
 
@@ -125,7 +128,7 @@ int main(int argc, char **argv)
     printf("[bench] key_size = %zu bits\n", sizeof(KeyType) * 8);
     printf("[bench] value_size = %zu bits\n", sizeof(ValType) * 8);
 
-    table = cuckoo_init(power);
+    table = cuckoo_init(power, sizeof(KeyType), sizeof(ValType));
 
     printf("[bench] inserting keys to the hash table\n");
 

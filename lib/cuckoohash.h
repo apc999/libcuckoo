@@ -1,8 +1,6 @@
 #ifndef _CUCKOOHASH_H
 #define _CUCKOOHASH_H
 
-#include "cuckoohash_config.h"
-
 typedef enum {
     ok = 0,
     failure = 1,
@@ -18,6 +16,18 @@ typedef enum {
  * the structure of a cuckoo hash table
  */
 typedef struct {
+
+    /* key size in bytes */
+    size_t nkey;
+
+    /* value size in bytes */
+    size_t nval;
+
+    /* size of a bucket in bytes */
+    size_t bucketsize;
+
+    /* size of the table in bytes */
+    size_t tablesize;
 
     /* number of items inserted */
     size_t hashitems;
@@ -55,13 +65,16 @@ typedef struct {
  * @brief Initialize the hash table
  *
  * @param h handler to the hash table
+ * @param nkey key size in bytes
+ * @param nval value size in bytes
  * @param hashtable_init logarithm of the initial table size
  *
  * @return handler to a cuckoo hash table structure on success,
  *         NULL on failure
  */
-cuckoo_hashtable_t* cuckoo_init(const int hashpower_init);
-
+cuckoo_hashtable_t* cuckoo_init(const int hashpower_init,
+                                const size_t nkey,
+                                const size_t nval); 
 /**
  * @brief Cleanup routine
  *
@@ -73,7 +86,6 @@ cuckoo_status cuckoo_exit(cuckoo_hashtable_t* h);
  * @brief Lookup key in the hash table
  *
  * @param h handler to the hash table
- *
  * @param key key to search
  * @param val value to return
  *
@@ -88,7 +100,6 @@ cuckoo_status cuckoo_find(cuckoo_hashtable_t* h, const char *key, char *val);
  *
  *  Inserting new key/value pair.
  *  If the key is already inserted, the new value will not be inserted
- *
  *
  * @param h handler to the hash table
  * @param key key to be inserted

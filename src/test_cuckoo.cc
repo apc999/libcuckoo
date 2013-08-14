@@ -20,23 +20,28 @@
 #include <string.h>
 #include <pthread.h>
 #include <math.h>
+#include <stdint.h>
 
 
 extern "C" {
 #include "cuckoohash.h"
+#include "cuckoohash_config.h" // for SLOT_PER_BUCKET
 }
+
+typedef uint32_t KeyType;
+typedef uint32_t ValType;
 
 int main(int argc, char** argv) 
 {
     bool passed = true;
     int i;    
     size_t power = 19;
-    size_t numkeys = (1 << power) * 4;
+    size_t numkeys = (1 << power) * SLOT_PER_BUCKET;
 
     printf("initializing two hash tables\n");
 
-    cuckoo_hashtable_t* smalltable = cuckoo_init(power);
-    cuckoo_hashtable_t* bigtable = cuckoo_init(power + 1);
+    cuckoo_hashtable_t* smalltable = cuckoo_init(power, sizeof(KeyType), sizeof(ValType));
+    cuckoo_hashtable_t* bigtable = cuckoo_init(power + 1, sizeof(KeyType), sizeof(ValType));
 
     printf("inserting keys to the hash table\n");
     int failure = -1;
@@ -58,7 +63,6 @@ int main(int argc, char** argv)
             break;
         }
     }
-
 
     printf("looking up keys in the hash table\n");
     for (i = 1; i < numkeys; i++) {

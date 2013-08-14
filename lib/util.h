@@ -1,7 +1,7 @@
 #ifndef UTIL_H
 #define UTIL_H
 
-#include "cuckoohash_config.h"  // KeyType
+#include "cuckoohash_config.h" // for DEBUG
 
 #define mutex_lock(mutex) while (pthread_mutex_trylock(mutex));
 
@@ -35,11 +35,10 @@ static uint64_t keycmp_mask[] = {0x0000000000000000ULL,
                                  0x0000ffffffffffffULL,
                                  0x00ffffffffffffffULL};
 static inline
-bool keycmp(const char* key1, const char* key2) {
+bool keycmp(const char* key1, const char* key2, const size_t len) {
 
     INT_KEYCMP_UNIT v_key1;
     INT_KEYCMP_UNIT v_key2;
-    size_t len = sizeof(KeyType);
     size_t k = 0;
     while ((len ) >= k + sizeof(INT_KEYCMP_UNIT)) {
         v_key1 = *(INT_KEYCMP_UNIT *) (key1 + k);
@@ -58,6 +57,18 @@ bool keycmp(const char* key1, const char* key2) {
     }
     return true;
 }
+
+static inline
+bool get_bit(char* p, size_t k) {
+    return ((*p) >> k) & 0x01;
+}
+
+static inline
+void set_bit(char* p, size_t k, bool v) {
+    *p &= ~(1 << k);
+    *p |= (v << k);
+}
+
 
 #define ANSI_COLOR_RED     "\x1b[31m"
 #define ANSI_COLOR_GREEN   "\x1b[32m"
