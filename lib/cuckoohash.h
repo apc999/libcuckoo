@@ -41,10 +41,8 @@ typedef struct {
     /* pointer to the array of buckets */
     void*  buckets;
 
-    /*
-     *  keyver_array is an array of version counters
-     *  we keep keyver_count = 8192
-     *
+    /* the array of version counters 
+     * we keep keyver_count = 8192
      */
     void* counters;
 
@@ -78,9 +76,21 @@ cuckoo_hashtable_t* cuckoo_init(const int hashpower_init,
 /**
  * @brief Cleanup routine
  *
+ * @param h handler to the hash table
+ *
+ * @return ok
  */
 cuckoo_status cuckoo_exit(cuckoo_hashtable_t* h);
 
+
+/**
+ * @brief Clear all existing keys
+ *
+ * @param h handler to the hash table
+ *
+ * @return ok
+ */
+cuckoo_status cuckoo_clear(cuckoo_hashtable_t* h);
 
 /**
  * @brief Lookup key in the hash table

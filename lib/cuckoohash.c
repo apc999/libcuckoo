@@ -687,8 +687,7 @@ cuckoo_hashtable_t* cuckoo_init(const int hashtable_init,
         goto Cleanup;
     }
 
-    memset(h->buckets,  0, h->tablesize);
-    memset(h->counters, 0, counter_size * sizeof(uint32_t));
+    cuckoo_clear(h);
 
     return h;
 
@@ -711,11 +710,28 @@ cuckoo_status cuckoo_exit(cuckoo_hashtable_t* h) {
     return ok;
 }
 
+cuckoo_status cuckoo_clear(cuckoo_hashtable_t* h) {
+
+    mutex_lock(&h->lock);
+
+    memset(h->buckets,  0, h->tablesize);
+    memset(h->counters, 0, counter_size * sizeof(uint32_t));
+    h->expanding = false;
+
+    mutex_unlock(&h->lock);
+    return ok;
+}
+
 cuckoo_status cuckoo_find(cuckoo_hashtable_t* h,
                           const char *key,
                           char *val) {
 
     uint32_t hv = _hashed_key(key, h->nkey);
+
+    //
+    // potential "false read miss" under expansion:
+    // calculation of i1 and i2 may use stale hashpower
+    //
     size_t   i1 = _index_hash(h, hv);
     size_t   i2 = _alt_index(h, hv, i1);
 
@@ -729,10 +745,11 @@ cuckoo_status cuckoo_insert(cuckoo_hashtable_t* h,
                             const char* val) {
 
     uint32_t hv = _hashed_key(key, h->nkey);
-    size_t   i1 = _index_hash(h, hv);
-    size_t   i2 = _alt_index(h, hv, i1);
 
     mutex_lock(&h->lock);
+
+    size_t   i1 = _index_hash(h, hv);
+    size_t   i2 = _alt_index(h, hv, i1);
 
     cuckoo_status st = _cuckoo_find(h, key, (char*) NULL, i1, i2);
     if (ok == st) {
@@ -758,10 +775,11 @@ cuckoo_status cuckoo_delete(cuckoo_hashtable_t* h,
                             const char *key) {
 
     uint32_t hv = _hashed_key(key, h->nkey);
-    size_t   i1 = _index_hash(h, hv);
-    size_t   i2 = _alt_index(h, hv, i1);
 
     mutex_lock(&h->lock);
+
+    size_t   i1 = _index_hash(h, hv);
+    size_t   i2 = _alt_index(h, hv, i1);
 
     cuckoo_status st = _cuckoo_delete(h, key, i1, i2);
 
@@ -776,10 +794,11 @@ cuckoo_status cuckoo_update(cuckoo_hashtable_t* h,
                             const char *val) {
 
     uint32_t hv = _hashed_key(key, h->nkey);
-    size_t   i1 = _index_hash(h, hv);
-    size_t   i2 = _alt_index(h, hv, i1);
 
     mutex_lock(&h->lock);
+
+    size_t   i1 = _index_hash(h, hv);
+    size_t   i2 = _alt_index(h, hv, i1);
 
     cuckoo_status st = _cuckoo_update(h, key, val, i1, i2);
 
@@ -801,6 +820,8 @@ cuckoo_status cuckoo_expand(cuckoo_hashtable_t* h) {
 
     void* old_buckets = h->buckets;
     void* new_buckets = malloc(h->tablesize * 2);
+    printf("current: power %zu, tablesize %zu\n", h->hashpower, h->tablesize);
+    printf("[%p-%p]\n", new_buckets, new_buckets + h->tablesize * 2);
     if (!new_buckets) {
         h->expanding = false;
         mutex_unlock(&h->lock);
@@ -810,11 +831,14 @@ cuckoo_status cuckoo_expand(cuckoo_hashtable_t* h) {
     memcpy(new_buckets, h->buckets, h->tablesize);
     memcpy(new_buckets + h->tablesize, h->buckets, h->tablesize);
 
-    h->buckets         = new_buckets;
-    h->hashpower      += 1;
-    h->tablesize      *= 2;
-    h->cleaned_buckets = 0;
+    h->buckets = new_buckets;
 
+    reorder_barrier();
+
+    h->hashpower++;
+    h->tablesize <<= 1;
+    h->cleaned_buckets = 0;
+    printf("old %p, new %p\n", old_buckets, new_buckets);
     mutex_unlock(&h->lock);
 
     free(old_buckets);
@@ -825,8 +849,10 @@ cuckoo_status cuckoo_expand(cuckoo_hashtable_t* h) {
 void cuckoo_report(cuckoo_hashtable_t* h) {
 
     printf("total number of items %zu\n", h->hashitems);
-    printf("total size %zu Bytes, or %.2f MB\n", h->tablesize, (float) h->tablesize / (1 <<20));
-    printf("load factor %.4f\n", 1.0 * h->hashitems / SLOT_PER_BUCKET / hashsize(h->hashpower));
+    printf("total size %zu Bytes, or %.2f MB\n", 
+           h->tablesize, (float) h->tablesize / (1 << 20));
+    printf("load factor %.4f\n", 
+           1.0 * h->hashitems / SLOT_PER_BUCKET / hashsize(h->hashpower));
 }
 
 float cuckoo_loadfactor(cuckoo_hashtable_t* h) {

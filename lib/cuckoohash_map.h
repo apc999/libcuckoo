@@ -106,14 +106,18 @@ public:
 
     typedef size_t size_type;
 
-    // Constructor
+    // Constructor and destructor
     explicit
     cuckoohash_map(size_t hashpower_init = HASHPOWER_DEFAULT)
         : ht(cuckoo_init(hashpower_init, sizeof(key_type), sizeof(mapped_type))) {
     }
 
+    ~cuckoohash_map() {
+        cuckoo_exit(ht);
+    }
+
     void clear() {
-        assert(false);
+        cuckoo_clear(ht);
     }
 
     // Iterator functions
@@ -209,6 +213,7 @@ public:
         }
     }
 
+    // None standard functions:
     // Update routines
     bool update(const key_type& key, const mapped_type& val) {
         cuckoo_status st;
@@ -219,6 +224,10 @@ public:
         } else {
             return false;
         }
+    }
+
+    void report() {
+        cuckoo_report(ht);
     }
 };
 
