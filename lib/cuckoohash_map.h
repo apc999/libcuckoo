@@ -8,47 +8,43 @@ extern "C" {
 #include "cuckoohash_config.h"
 }
 
-using namespace std;
-
-//
 // Forward declaration
-//
-template <typename KeyType, typename ValType>
+template <typename Key, typename T>
 class cuckoohash_map;
 
 
-template <typename KeyType, typename ValType> 
+template <typename Key, typename T>
 struct cuckoohash_map_iterator;
 
 
-// not supported yet 
-//template <typename KeyType, typename ValType> 
-//struct cuckoohash_map_const_iterator;
-
-
-template <typename KeyType, typename ValType> 
+template <typename Key, typename T>
 struct cuckoohash_map_iterator  {
 
 public:
-    typedef cuckoohash_map_iterator<KeyType, ValType> iterator;
-    typedef std::pair<KeyType, ValType> value_type;
+    typedef Key key_type;
+    typedef std::pair<Key, T> value_type;
+    typedef T mapped_type;
 
+    typedef cuckoohash_map_iterator<key_type, mapped_type> iterator;
 
-    cuckoohash_map_iterator(const cuckoohash_map<KeyType, ValType> *h,
-                            const KeyType& k,
-                            const ValType& v,
-                            const bool     is_end)
-    : ht(h), key(k), val(v), is_end(is_end), data(value_type(k, v)) {
+    cuckoohash_map_iterator(const cuckoohash_map<key_type, mapped_type> *h,
+                            const key_type& k,
+                            const mapped_type& v)
+    : ht(h), key(k), val(v), data(value_type(k, v)) {
     }
 
     cuckoohash_map_iterator(const iterator& it)
     : ht(it.ht), key(it.key), val(it.val), is_end(it.is_end), data(it.data) {
     }
 
-    cuckoohash_map_iterator()
-        : ht(NULL), is_end(true) { 
+    cuckoohash_map_iterator(const cuckoohash_map<key_type, mapped_type> *h,
+                            bool is_end)
+    : ht(h), is_end(is_end) {
     }
 
+    cuckoohash_map_iterator()
+    : ht(NULL) {
+    }
 
     virtual ~cuckoohash_map_iterator() { }
 
@@ -74,63 +70,64 @@ public:
     bool operator==(const iterator& it) const {
         if (is_end && it.is_end)
             return true;
-        else 
+        else
             return key == it.key;
     }
 
     bool operator!=(const iterator& it) const {
         if (is_end || it.is_end)
             return true;
-        else 
+        else
             return key != it.key;
     }
 
     // The actual data
-    const cuckoohash_map<KeyType, ValType> *ht;
-    KeyType    key;
-    ValType    val;
-    bool       is_end;
-    value_type data;
+    const cuckoohash_map<key_type, mapped_type> *ht;
+    key_type    key;
+    mapped_type val;
+    bool        is_end;
+    value_type  data;
 };
 
 
-template <typename KeyType, typename ValType> 
+template <typename Key, typename T>
 class cuckoohash_map {
 private:
     cuckoo_hashtable_t *ht;
 
 public:
 
-    typedef cuckoohash_map_iterator<KeyType, ValType> iterator;
+    // Type definitions
+    typedef Key key_type;
+    typedef std::pair<Key, T> value_type;
+    typedef T mapped_type;
+
+    typedef cuckoohash_map_iterator<Key, T> iterator;
+
     typedef size_t size_type;
 
-    //
     // Constructor
-    //
     explicit
-    cuckoohash_map(size_t hashpower_init = HASHPOWER_DEFAULT) 
-        : ht(cuckoo_init(hashpower_init, sizeof(KeyType), sizeof(ValType))) {
+    cuckoohash_map(size_t hashpower_init = HASHPOWER_DEFAULT)
+        : ht(cuckoo_init(hashpower_init, sizeof(key_type), sizeof(mapped_type))) {
     }
 
     void clear() {
+        assert(false);
     }
 
-    //
     // Iterator functions
-    //
     iterator begin() {
         assert(false);
-        return iterator();
+        return iterator(ht);
     }
 
     iterator end() {
-        return iterator(this, (KeyType) 0, (ValType) 0, true);
+        return iterator(this, true);
     }
 
-    
-    //
+
     // Functions concerning size
-    //
     size_type size() const {
         return (ht->hashitems);
     }
@@ -154,41 +151,42 @@ public:
     }
 
 
-    //
+    // Load factor
     float load_factor() const {
         return cuckoo_loadfactor(ht);
     }
-    
+
     float max_load_factor() const {
         return 1.0;
     }
 
-    
-    //
+
     // Lookup routines
-    //
-    iterator find(const KeyType& key) {
+    bool find(const key_type& key, mapped_type& val) {
         cuckoo_status st;
-        ValType val;
 
         st = cuckoo_find(ht, (const char*) &key, (char*) &val);
         if (st == ok) {
-            return iterator(this, key, val, false);
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    iterator find(const key_type& key) {
+        cuckoo_status st;
+        mapped_type   val;
+
+        st = cuckoo_find(ht, (const char*) &key, (char*) &val);
+        if (st == ok) {
+            return iterator(this, key, val);
         } else {
             return end();
         }
     }
 
-    //
-    // If key exists, return the 
-    //
-    //ValType& operator[](const KeyType& key) {
-    //}
-
-    //
     // Insertion routines
-    //
-    bool insert(const KeyType& key, const ValType& val) {
+    bool insert(const key_type& key, const mapped_type& val) {
         cuckoo_status st;
 
         st = cuckoo_insert(ht, (const char*) &key, (char*) &val);
@@ -197,26 +195,31 @@ public:
         } else {
             return false;
         }
-        
     }
 
-    //
     // Deletion routines
-    //
-    size_type erase(const KeyType& key) {
+    bool erase(const key_type& key) {
         cuckoo_status st;
-        
+
         st = cuckoo_delete(ht, (const char*) &key);
         if (st == ok) {
-            return 1;
+            return true;
         } else {
             return false;
         }
     }
 
-    //void erase(iterator it) {
-    //}
+    // Update routines
+    bool update(const key_type& key, const mapped_type& val) {
+        cuckoo_status st;
 
+        st = cuckoo_update(ht, (const char*) &key, (const char*) val);
+        if (st == ok) {
+            return true;
+        } else {
+            return false;
+        }
+    }
 };
 
 #endif

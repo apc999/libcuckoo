@@ -50,7 +50,7 @@ int main(int argc, char** argv)
         if (it == table.end()) {
             assert(false);
         } else {
-            std::cout << it->first << " " << it->second << endl;
+            std::cout << it->first << " " << it->second << std::endl;
         }
         
     }
