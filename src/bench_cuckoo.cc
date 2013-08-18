@@ -15,9 +15,7 @@
 #include <sys/time.h>
 #include <algorithm>
 
-extern "C" {
 #include "cuckoohash.h"
-}
 
 typedef uint32_t KeyType;
 typedef uint32_t ValType;

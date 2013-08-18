@@ -3,10 +3,8 @@
 
 #include <utility>
 
-extern "C" {
 #include "cuckoohash.h"
 #include "cuckoohash_config.h"
-}
 
 // Forward declaration
 template <typename Key, typename T>

@@ -27,10 +27,8 @@
 
 #include <algorithm>
 
-extern "C" {
 #include "cuckoohash.h"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
-}
 
 typedef uint32_t KeyType;
 typedef uint32_t ValType;

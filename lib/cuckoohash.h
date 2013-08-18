@@ -1,6 +1,11 @@
 #ifndef _CUCKOOHASH_H
 #define _CUCKOOHASH_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
+
 typedef enum {
     ok = 0,
     failure = 1,
@@ -173,4 +178,8 @@ void cuckoo_report(cuckoo_hashtable_t* h);
  */
 float cuckoo_loadfactor(cuckoo_hashtable_t* h);
 
-#endif
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */
+
+#endif /* _CUCKOOHASH_H */
