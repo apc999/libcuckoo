@@ -28,7 +28,7 @@ public:
     cuckoohash_map_iterator(const cuckoohash_map<key_type, mapped_type> *h,
                             const key_type& k,
                             const mapped_type& v)
-    : ht(h), key(k), val(v), data(value_type(k, v)) {
+    : ht(h), key(k), val(v), data(value_type(k, v)), is_end(false) {
     }
 
     cuckoohash_map_iterator(const iterator& it)
@@ -41,7 +41,7 @@ public:
     }
 
     cuckoohash_map_iterator()
-    : ht(NULL) {
+    : ht(NULL), is_end(false) {
     }
 
     virtual ~cuckoohash_map_iterator() { }

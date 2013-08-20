@@ -344,8 +344,9 @@ static int _cuckoopath_move(cuckoo_hashtable_t* h,
         memcpy(slot_key(h, i2, j2), slot_key(h, i1, j1), h->nkey);
         memcpy(slot_val(h, i2, j2), slot_val(h, i1, j1), h->nval);
 
-        slot_set_empty(h, i1, j1);
+
         slot_set_used(h, i2, j2);
+        slot_set_empty(h, i1, j1);
 
         end_incr_counter2(h, i1, i2);
 
