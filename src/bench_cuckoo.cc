@@ -16,6 +16,7 @@
 #include <algorithm>
 
 #include "cuckoohash.h"
+#include "cuckoohash_config.h"
 
 typedef uint32_t KeyType;
 typedef uint32_t ValType;
@@ -119,7 +120,7 @@ int main(int argc, char **argv)
             exit(-1);
         }
     }
-    size_t numkeys = (1 << power) * 4;
+    size_t numkeys = (1 << power) * SLOT_PER_BUCKET;
 
     printf("[bench] power = %zu\n", power);
     printf("[bench] total_keys = %zu  (%.2f M)\n", numkeys, (float) numkeys / MILLION); 
