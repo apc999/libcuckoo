@@ -307,16 +307,16 @@ private:
     }  __attribute__((__packed__)) Bucket;
 
     /* key size in bytes */
-    const size_t kKeySize   = sizeof(key_type);
+    static const size_t kKeySize   = sizeof(key_type);
 
     /* value size in bytes */
-    const size_t kValueSize = sizeof(mapped_type);
+    static const size_t kValueSize = sizeof(mapped_type);
 
     /* size of a bucket in bytes */
-    const size_t kBucketSize = sizeof(Bucket);
+    static const size_t kBucketSize = sizeof(Bucket);
 
     /* size of counter array */
-    const size_t kNumCounters = 1 << 13;
+    static const size_t kNumCounters = 1 << 13;
 
     /* size of the table in bytes */
     size_t tablesize_;
