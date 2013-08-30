@@ -3,10 +3,10 @@
  * @file   test_cuckoo.c
  * @author Bin Fan <binfan@cs.cmu.edu>
  * @date   Thu Feb 28 15:54:47 2013
- * 
+ *
  * @brief  a simple example of using cuckoo hash table with multiple threads
- * 
- * 
+ *
+ *
  */
 
 #ifdef HAVE_CONFIG_H
@@ -109,13 +109,13 @@ static void *lookup_thread(void *arg) {
     th->num_written = 0;
 
     std::mt19937_64 rng;
-    
+
     while (keep_reading) {
         /*
          * query keys in [1, total_inserted]
          * note that total_inserted may be updated by insert_thread
          * so we query 1 million keys to amortize the cost of atomically accessing total_inserted
-         * 
+         *
          */
         size_t nkeys;
         pthread_mutex_lock(&task_mutex);
@@ -130,28 +130,29 @@ static void *lookup_thread(void *arg) {
 
         size_t idx_start = uniform(rng);
         size_t idx_end   = std::min(idx_start + 1 * million, nkeys);
-        
+
         for (size_t i = idx_start; i < idx_end; i++) {
             th->ops++;
 
             KeyType key = (KeyType) i;
             ValType val = (ValType) 0;
+
             bool    ret = table->find(key, val);
-        
-            if (ret) {
-                printf("[reader%d] reading key %zu from table fails\n", th->id, i);
+
+            if (!ret) {
+                printf("[reader%d] reading key %zu fails, inserted %zu\n", th->id, i, nkeys);
                 th->failures++;
                 continue;
             }
             if (val != VALUE(key)) {
-                printf("[reader%d] wrong value for key %zu from table\n", th->id, i);
+                printf("[reader%d] wrong value for key %zu\n", th->id, i);
                 th->failures++;
                 continue;
             }
             th->num_read++;
         }
     }
-    
+
     pthread_exit(NULL);
 }
 
@@ -162,7 +163,7 @@ static void *insert_thread(void *arg) {
     th->failures    = 0;
     th->num_read    = 0;
     th->num_written = 0;
-    
+
     while (keep_writing) {
 
         size_t task = task_assign();
@@ -173,6 +174,7 @@ static void *insert_thread(void *arg) {
             KeyType key = (KeyType) i;
             ValType val = (ValType) VALUE(i);
             bool   ret;
+
             ret = table->insert(key, val);
 
             if (ret) {
@@ -181,7 +183,6 @@ static void *insert_thread(void *arg) {
             else {
                 printf("[writer%d] table is full when inserting key %zu\n", th->id, th->ops);
                 ret = table->expand();
-	  	
                 if (ret) {
                     i--;
                 }
@@ -191,7 +192,7 @@ static void *insert_thread(void *arg) {
                 }
             }
         }
-        task_complete(task);        
+        task_complete(task);
     }
 
     pthread_exit(NULL);
@@ -205,7 +206,7 @@ static void usage(char* myname) {
     printf("\t-h  : show usage\n");
 }
 
-int main(int argc, char** argv) 
+int main(int argc, char** argv)
 {
 
     int i;
@@ -225,8 +226,8 @@ int main(int argc, char** argv)
         default:
             usage(argv[0]);
             exit(-1);
-        }   
-    }  
+        }
+    }
 
     task_init(total);
 
@@ -264,12 +265,12 @@ int main(int argc, char** argv)
     memset(last_num_read, 0, num_readers);
     memset(last_num_written, 0, num_writers);
 
-    struct timeval tvs, tve; 
-    gettimeofday(&tvs, NULL); 
+    struct timeval tvs, tve;
+    gettimeofday(&tvs, NULL);
 
     while (keep_reading && keep_writing) {
         sleep(1);
-        gettimeofday(&tve, NULL); 
+        gettimeofday(&tve, NULL);
         double tvsd = (double)tvs.tv_sec + (double)tvs.tv_usec / 1000000;
         double tved = (double)tve.tv_sec + (double)tve.tv_usec / 1000000;
         double tdiff = tved - tvsd;
