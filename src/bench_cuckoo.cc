@@ -15,12 +15,12 @@
 #include <sys/time.h>
 #include <algorithm>
 
-#include "cuckoohash.h"
-#include "cuckoohash_config.h"
+#include "cuckoohash_map.h"
+#include "cuckoohash_config.h" // for SLOT_PER_BUCKET
 
 typedef uint32_t KeyType;
 typedef uint32_t ValType;
-
+typedef cuckoohash_map<KeyType, ValType> Table;
 
 using namespace std;
 
@@ -34,11 +34,11 @@ double time_now()
     return (double)tv.tv_sec + (double)tv.tv_usec / MILLION;
 }
 
-static size_t nq    = 1024; 
-static size_t nt    = 1;
-static size_t power = 21;
+static size_t nq       = 1024; 
+static size_t nt       = 1;
+static size_t power    = 21;
 static float  duration = 2.0;
-static cuckoo_hashtable_t* table = NULL;
+static Table *table    = NULL;
 void usage() {
     printf("./bench_setsep [-p #] [-q # ] [-t #] [-h]\n");
     printf("\t-p: hash power of hash table, default %zu\n", power);
@@ -48,14 +48,14 @@ void usage() {
 }
 
 typedef struct {
-    int     tid;
+    size_t  tid;
     double  time;
     double  tput;
     size_t  gets;
     size_t  puts;
     size_t  hits;
     size_t* queries;
-    int cpu;
+    size_t  cpu;
     uint32_t junk;
 } thread_param;
 
@@ -70,7 +70,6 @@ void* exec_thread(void* p) {
 #endif
     size_t   w     = nq / nt;
     size_t*  q     = tp->queries + w * tp->tid;
-    size_t   total = 0;
     size_t   left  = w; 
     size_t   k     = 0;
 
@@ -79,8 +78,8 @@ void* exec_thread(void* p) {
         double ts = time_now();
         for (size_t i = 0; i < step; i++, k++) {
             KeyType key = (KeyType) q[k];
-            ValType  val;
-            cuckoo_status st  = cuckoo_find(table, (const char*) &key, (char*) & val);
+            ValType val = 0;
+            table->find(key, val);
             tp->junk ^= val;
         }
         tp->time += time_now() - ts;
@@ -127,7 +126,7 @@ int main(int argc, char **argv)
     printf("[bench] key_size = %zu bits\n", sizeof(KeyType) * 8);
     printf("[bench] value_size = %zu bits\n", sizeof(ValType) * 8);
 
-    table = cuckoo_init(power, sizeof(KeyType), sizeof(ValType));
+    table = new Table(power);
 
     printf("[bench] inserting keys to the hash table\n");
 
@@ -140,8 +139,8 @@ int main(int argc, char **argv)
     for (size_t i = 1; i < numkeys; i++) {
         KeyType key = (KeyType) i;
         ValType val = (ValType) i * 2 - 1;
-        cuckoo_status st = cuckoo_insert(table, (const char*) &key, (const char*) &val);
-        if (st != ok) {
+        bool done = table->insert(key, val);
+        if (!done) {
             ninserted = i;
             break;
         }
@@ -153,7 +152,7 @@ int main(int argc, char **argv)
     printf("[bench] insert_time = %.2f seconds\n", td );
     printf("[bench] insert_tput = %.2f MOPS\n", ninserted / td / MILLION);
 
-    cuckoo_report(table);
+    table->report();
 
     std::mt19937_64 rng;
     //rng.seed(static_cast<unsigned int>(std::time(0)));
@@ -171,11 +170,11 @@ int main(int argc, char **argv)
     pthread_attr_t attr;
     pthread_attr_init(&attr);
 
-    for (int i = 0; i < nt; i++) {
+    for (size_t i = 0; i < nt; i++) {
         tp[i].tid = i;
         tp[i].queries = queries;
 #ifdef __linux__
-        int c = 2 * i + 1 ; //assign_core(i);
+        size_t c = 2 * i + 1 ; //assign_core(i);
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
         CPU_SET(c, &cpuset);
@@ -188,15 +187,14 @@ int main(int argc, char **argv)
         }
     }
     double total_tput = 0.0;
-    size_t total_puts = 0;
     uint32_t junk = 0;
-    for (int i = 0; i < nt; i++) {
+    for (size_t i = 0; i < nt; i++) {
         pthread_join(threads[i], NULL);
         total_tput += tp[i].tput;
         junk ^= tp[i].junk;
         //if (verbose) 
         {
-            printf("[thread%d] %.2f sec, cpu %zu, tput %.2f MOPS\n", 
+            printf("[thread%zu] %.2f sec, cpu %zu, tput %.2f MOPS\n", 
                    i, tp[i].time, tp[i].cpu, tp[i].tput / MILLION);
         }
     }

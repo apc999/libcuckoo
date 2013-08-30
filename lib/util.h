@@ -3,7 +3,7 @@
 
 #include "cuckoohash_config.h" // for DEBUG
 
-#define mutex_lock(mutex) while (pthread_mutex_trylock(mutex));
+#define mutex_lock(mutex) while (pthread_mutex_trylock(mutex)) {};
 
 #define mutex_unlock(mutex) pthread_mutex_unlock(mutex)
 
@@ -80,7 +80,7 @@ void set_bit(char* p, size_t k, bool v) {
 
 
 #if DEBUG
-#  define DBG(fmt, args...)  fprintf(stderr, ANSI_COLOR_GREEN"[libcuckoo:%s:%d] "fmt""ANSI_COLOR_RESET,__FILE__,__LINE__,args)
+#  define DBG(fmt, args...)  fprintf(stderr, ANSI_COLOR_GREEN"[libcuckoo:%s:%d] " fmt"" ANSI_COLOR_RESET,__FILE__,__LINE__,args)
 #else
 #  define DBG(fmt, args...)  do {} while (0)
 #endif

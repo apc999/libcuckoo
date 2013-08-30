@@ -32,7 +32,7 @@ typedef uint32_t ValType;
 int main(int argc, char** argv)
 {
     bool passed = true;
-    int i;
+    size_t i;
     size_t power = 19;
     size_t numkeys = (1 << power) * SLOT_PER_BUCKET;
 
@@ -42,22 +42,22 @@ int main(int argc, char** argv)
     cuckoohash_map<KeyType, ValType> bigtable(power + 1);
 
     printf("inserting keys to the hash table\n");
-    int failure = -1;
+    size_t failure = numkeys;
     for (i = 1; i < numkeys; i++) {
         bool ret;
         KeyType key = (KeyType) i;
         ValType val = (ValType) i * 2 - 1;
 
-        if (failure == -1) {
+        if (failure == numkeys) {
             ret = smalltable.insert(key, val);
             if (!ret) {
-                printf("inserting key %d to smalltable fails \n", i);
+                printf("inserting key %zu to smalltable fails \n", i);
                 failure = i;
             }
         }
         ret = bigtable.insert(key, val);
         if (!ret) {
-            printf("inserting key %d to bigtable fails \n", i);
+            printf("inserting key %zu to bigtable fails \n", i);
             break;
         }
     }
@@ -73,19 +73,19 @@ int main(int argc, char** argv)
 
         if (i < failure) {
             if (!ret1) {
-                printf("failure to read key %d from smalltable\n", i);
+                printf("failure to read key %zu from smalltable\n", i);
                 passed = false;
                 break;
             }
             if (val1 != i * 2 -1 ) {
-                printf("smalltable reads wrong value for key %d\n", i);
+                printf("smalltable reads wrong value for key %zu\n", i);
                 passed = false;
                 break;
             }
         }
         else {
             if (ret1) {
-                printf(" key %d should not be in smalltable\n", i);
+                printf(" key %zu should not be in smalltable\n", i);
                 passed = false;
                 break;
             }
@@ -93,13 +93,13 @@ int main(int argc, char** argv)
 
 
         if (!ret2) {
-            printf("failure to read key %d from bigtable\n", i);
+            printf("failure to read key %zu from bigtable\n", i);
             passed = false;
             break;
         }
 
         if (val2 != i * 2 -1 ) {
-            printf("bigtable reads wrong value for key %d\n", i);
+            printf("bigtable reads wrong value for key %zu\n", i);
             passed = false;
             break;
         }

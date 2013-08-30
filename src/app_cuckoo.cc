@@ -35,15 +35,13 @@ int main(int argc, char** argv)
     cuckoohash_map<uint32_t, double> table(power);
     cuckoohash_map<uint32_t, double>::iterator it;
 
-    int num_inserted = 0;
-    for (int i = 1; i < numkeys; i++) {
+    for (size_t i = 1; i < numkeys; i++) {
         uint32_t key = (uint32_t) i;
         double   val = (double) 0.5 * i  - 1;
 
         bool done = table.insert(key, val);
         if (!done) {
-            printf("inserting key %d to table fails \n", i);
-            num_inserted = i;
+            printf("inserting key %zu to table fails \n", i);
             break;
         }
         it = table.find(key);
