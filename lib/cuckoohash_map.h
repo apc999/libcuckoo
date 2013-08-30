@@ -887,7 +887,7 @@ private:
         expanding_ = true;
 
         Bucket* old_buckets = buckets_;
-        Bucket* new_buckets = new Bucket[hashsize(hashpower_)];
+        Bucket* new_buckets = new Bucket[hashsize(hashpower_) * 2];
         printf("current: power %zu, tablesize %zu\n", hashpower_, tablesize_);
         /* if (!new_buckets) { */
         /*     expanding = false; */
@@ -896,7 +896,7 @@ private:
         /* } */
 
         memcpy(new_buckets, buckets_, tablesize_);
-        memcpy(new_buckets + tablesize_, buckets_, tablesize_);
+        memcpy(new_buckets + hashsize(hashpower_), buckets_, tablesize_);
 
         buckets_ = new_buckets;
 
