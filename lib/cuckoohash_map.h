@@ -6,7 +6,9 @@
 #include "cuckoohash_config.h"
 #include "cuckoohash_util.h"
 #include "util.h"
+extern "C" {
 #include "city.h"
+}
 
 // Forward declaration
 template <class Key, class T, class Hash>
@@ -191,7 +193,21 @@ public:
         size_t   i1 = index_hash(hv);
         size_t   i2 = alt_index(hv, i1);
 
+        uint32_t vs1, vs2, ve1, ve2;
+    TryRead:
+        start_read_counter2(i1, i2, vs1, vs2);
+
+        if (((vs1 & 1) || (vs2 & 1) )) {
+            goto TryRead;
+        }
+
         cuckoo_status st = cuckoo_find(key, val, i1, i2);
+
+        end_read_counter2(i1, i2, ve1, ve2);
+
+        if (((vs1 != ve1) || (vs2 != ve2))) {
+            goto TryRead;
+        }
 
         if (st == ok) {
             return true;
@@ -223,8 +239,10 @@ public:
         size_t   i1 = index_hash(hv);
         size_t   i2 = alt_index(hv, i1);
 
+        cuckoo_status st;
         mapped_type oldval;
-        cuckoo_status st = cuckoo_find(key, oldval, i1, i2);
+
+        st = cuckoo_find(key, oldval, i1, i2);
         if (ok == st) {
             mutex_unlock(&lock_);
             return false; // failure_key_duplicated;
@@ -694,23 +712,9 @@ private:
                               const size_t i2) {
         bool result;
 
-        uint32_t vs1, vs2, ve1, ve2;
-    TryRead:
-        start_read_counter2(i1, i2, vs1, vs2);
-
-        if (((vs1 & 1) || (vs2 & 1) )) {
-            goto TryRead;
-        }
-
         result = try_read_from_bucket(key, val, i1);
         if (!result) {
             result = try_read_from_bucket(key, val, i2);
-        }
-
-        end_read_counter2(i1, i2, ve1, ve2);
-
-        if (((vs1 != ve1) || (vs2 != ve2))) {
-            goto TryRead;
         }
 
         if (result) {
