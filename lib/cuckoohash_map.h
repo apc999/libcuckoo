@@ -442,7 +442,7 @@ private:
     typedef struct  {
         size_t   buckets_[NUM_CUCKOO_PATH];
         size_t   slots[NUM_CUCKOO_PATH];
-        uint32_t keys[NUM_CUCKOO_PATH];
+        key_type keys[NUM_CUCKOO_PATH];
     }  __attribute__((__packed__)) CuckooRecord;
 
     /**
@@ -493,7 +493,7 @@ private:
             depth++;
         }
 
-        //DBG("%zu max cuckoo achieved, abort\n", num_kicks);
+        DBG("%zu max cuckoo achieved, abort\n", num_kicks);
         return -1;
     }
 
@@ -529,9 +529,7 @@ private:
              * there's a small chance we've gotten scooped by a later cuckoo.
              * If that happened, just... try again.
              */
-            if (!keycmp((char*) &buckets_[i1].keys[j1], 
-                        (char*) &from->keys[idx],
-                        kKeySize)) {
+            if (buckets_[i1].keys[j1] != from->keys[idx]) {
                 /* try again */
                 return depth;
             }
@@ -625,9 +623,7 @@ private:
                 continue;
             }
 
-            if (keycmp((char*) &key, 
-                       (char*) &buckets_[i].keys[j],
-                       kKeySize)) {
+            if (key == buckets_[i].keys[j]) {
                 val = buckets_[i].vals[j];
                 return true;
             }
@@ -680,10 +676,7 @@ private:
                 continue;
             }
 
-            if (keycmp((char*) &buckets_[i].keys[j], 
-                       (char*) &key, 
-                       kKeySize)) {
-
+            if (buckets_[i].keys[j] == key) {
                 start_incr_counter(i);
                 set_slot_empty(i, j);
                 end_incr_counter(i);
