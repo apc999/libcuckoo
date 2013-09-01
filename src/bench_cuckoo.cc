@@ -40,12 +40,14 @@ static size_t power    = 21;
 static float  duration = 2.0;
 static Table *table    = NULL;
 void usage() {
-    printf("./bench_setsep [-p #] [-q # ] [-t #] [-h]\n");
+    printf("./bench_cuckoo [-p #] [-q # ] [-t #] [-h]\n");
     printf("\t-p: hash power of hash table, default %zu\n", power);
     printf("\t-q: number of queries = 2^(arg), default 10\n");
     printf("\t-t: number of threads to benchmark, default %zu\n", nt);
     printf("\t-h: usage\n");
 }
+
+#define CACHE_LINE_SIZE 64
 
 typedef struct {
     size_t  tid;
@@ -57,7 +59,7 @@ typedef struct {
     size_t* queries;
     size_t  cpu;
     uint32_t junk;
-} thread_param;
+} __attribute__((aligned (CACHE_LINE_SIZE))) thread_param;
 
 void* exec_thread(void* p) {
     thread_param* tp = (thread_param*) p;

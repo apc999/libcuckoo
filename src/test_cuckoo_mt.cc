@@ -42,13 +42,15 @@ static volatile bool keep_reading = true;
 static volatile bool keep_writing = true;
 static volatile size_t total_inserted;
 
+#define CACHE_LINE_SIZE 64
+
 typedef struct {
     size_t num_read;
     size_t num_written;
     size_t ops;
     size_t failures;
     int id;
-} thread_arg_t;
+} __attribute__((aligned (CACHE_LINE_SIZE))) thread_arg_t;
 
 static size_t task_next;
 static size_t task_done;
