@@ -23,6 +23,8 @@
 #include <math.h>
 #include <stdint.h>
 
+#include <string>
+#include <sstream>
 
 #include "cuckoohash_map.h"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
@@ -32,26 +34,32 @@ int main(int argc, char** argv)
     size_t power = 8;
     size_t numkeys = (1 << power) * SLOT_PER_BUCKET;
 
-    cuckoohash_map<uint32_t, double> table(power);
-    cuckoohash_map<uint32_t, double>::iterator it;
+
+
+    cuckoohash_map<std::string, double> table(power);
+    cuckoohash_map<std::string, double>::iterator it;
+
 
     for (size_t i = 1; i < numkeys; i++) {
-        uint32_t key = (uint32_t) i;
+        std::stringstream ss;
+        ss << "key-" << i;
+        std::string key = ss.str();
         double   val = (double) 0.5 * i  - 1;
 
         bool done = table.insert(key, val);
-        if (!done) {
-            printf("inserting key %zu to table fails \n", i);
-            break;
-        }
+         if (!done) {
+             printf("inserting key %zu to table fails \n", i);
+             break;
+         }
         it = table.find(key);
         if (it == table.end()) {
             assert(false);
         } else {
-            std::cout << it->first << " " << it->second << std::endl;
+            //std::cout << it->first << " " << it->second << std::endl;
         }
-        
     }
+
+    table.report();
 
     return 0;
 }

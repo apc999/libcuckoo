@@ -322,7 +322,7 @@ private:
         char        flag;
         key_type    keys[SLOT_PER_BUCKET];
         mapped_type vals[SLOT_PER_BUCKET];
-    }  __attribute__((__packed__)) Bucket;
+    } __attribute__((__packed__)) Bucket;
 
     /* key size in bytes */
     static const size_t kKeySize   = sizeof(key_type);
@@ -366,8 +366,8 @@ private:
     size_t cleaned_buckets_;
 
     uint32_t hashed_key(const key_type &key) {
-        //return hasher()(key);
-        return CityHash32((const char*) &key, kKeySize);
+        return hasher()(key);
+        //return CityHash32((const char*) &key, kKeySize);
     }
 
     /**
@@ -443,7 +443,7 @@ private:
         size_t   buckets_[NUM_CUCKOO_PATH];
         size_t   slots[NUM_CUCKOO_PATH];
         key_type keys[NUM_CUCKOO_PATH];
-    }  __attribute__((__packed__)) CuckooRecord;
+    }  CuckooRecord; //__attribute__((__packed__)) CuckooRecord;
 
     /**
      * @brief Find a cuckoo path connecting to an empty slot
@@ -568,7 +568,7 @@ private:
             cuckoo_path = new CuckooRecord[MAX_CUCKOO_COUNT];
         }
 
-        memset(cuckoo_path, 0, MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
+        //memset(cuckoo_path, 0, MAX_CUCKOO_COUNT * sizeof(CuckooRecord));
 
         for (size_t idx = 0; idx < NUM_CUCKOO_PATH; idx++) {
             if (idx < NUM_CUCKOO_PATH / 2) {
@@ -864,7 +864,9 @@ private:
     void cuckoo_clear() {
         mutex_lock(&lock_);
 
-        memset(buckets_,  0, tablesize_);
+        for (size_t i = 0; i < hashsize(hashpower_); i++) {
+            buckets_[i].flag = 0;
+        }
         memset(counters_, 0, kNumCounters * sizeof(uint32_t));
         expanding_ = false;
 
