@@ -18,7 +18,7 @@ template <class Key, class T, class Hash>
 template <class Key, class T, class Hash>
     struct cuckoohash_map_iterator;
 
-
+// state used internally
 typedef enum {
     ok = 0,
     failure = 1,
@@ -35,13 +35,13 @@ template <class Key,
           class T,
           class Hash = std::hash<Key> >
     struct cuckoohash_map_iterator  {
-    public:
-        typedef Key               key_type;
-        typedef std::pair<Key, T> value_type;
-        typedef T                 mapped_type;
-        typedef Hash              hasher;
+public:
+    typedef Key               key_type;
+    typedef std::pair<Key, T> value_type;
+    typedef T                 mapped_type;
+    typedef Hash              hasher;
 
-        typedef cuckoohash_map_iterator<key_type, mapped_type, hasher> iterator;
+    typedef cuckoohash_map_iterator<key_type, mapped_type, hasher> iterator;
 
     cuckoohash_map_iterator(const cuckoohash_map<key_type, mapped_type, hasher> *h,
                             const key_type& k,
@@ -62,48 +62,48 @@ template <class Key,
     : ht(NULL), is_end(false) {
     }
 
-        virtual ~cuckoohash_map_iterator() { }
+    virtual ~cuckoohash_map_iterator() { }
 
-        // Dereferencer
-        value_type& operator*()  {
-            return data;
-        }
+    // Dereferencer
+    value_type& operator*()  {
+        return data;
+    }
 
-        value_type* operator->()  {
-            return &data;
-        }
+    value_type* operator->()  {
+        return &data;
+    }
 
-        // Arithmic, not supported yet
-        iterator& operator++() {
-            assert(false);
-        }
+    // Arithmic, not supported yet
+    iterator& operator++() {
+        assert(false);
+    }
 
-        iterator& operator++(int) {
-            assert(false);
-        }
+    iterator& operator++(int) {
+        assert(false);
+    }
 
-        // Comparison
-        bool operator==(const iterator& it) const {
-            if (is_end && it.is_end)
-                return true;
-            else
-                return key == it.key;
-        }
+    // Comparison
+    bool operator==(const iterator& it) const {
+        if (is_end && it.is_end)
+            return true;
+        else
+            return key == it.key;
+    }
 
-        bool operator!=(const iterator& it) const {
-            if (is_end || it.is_end)
-                return true;
-            else
-                return key != it.key;
-        }
+    bool operator!=(const iterator& it) const {
+        if (is_end || it.is_end)
+            return true;
+        else
+            return key != it.key;
+    }
 
-        // The actual data
-        const cuckoohash_map<key_type, mapped_type, hasher> *ht;
-        key_type    key;
-        mapped_type val;
-        bool        is_end;
-        value_type  data;
-    };
+    // The actual data
+    const cuckoohash_map<key_type, mapped_type, hasher> *ht;
+    key_type    key;
+    mapped_type val;
+    bool        is_end;
+    value_type  data;
+ };
 
 
 template <class Key, 
@@ -112,10 +112,10 @@ template <class Key,
     class cuckoohash_map {
 public:
     // Type definitions
-    typedef Key key_type;
+    typedef Key               key_type;
     typedef std::pair<Key, T> value_type;
-    typedef T mapped_type;
-    typedef Hash hasher;
+    typedef T                 mapped_type;
+    typedef Hash              hasher;
 
     typedef cuckoohash_map_iterator<key_type, mapped_type, hasher> iterator;
 
@@ -287,24 +287,20 @@ public:
     }
 
     /* // None standard functions: */
-    /* // Update routines */
-    /* bool update(const key_type& key, const mapped_type& val) { */
-    /*     cuckoo_status st; */
-
-    /*     st = cuckoo_update(ht, (const char*) &key, (const char*) val); */
-    /*     if (st == ok) { */
-    /*         return true; */
-    /*     } else { */
-    /*         return false; */
-    /*     } */
-    /* } */
-
 
     bool expand() {
-        cuckoo_status st;
 
-        st = cuckoo_expand();
+        Bucket* old_buckets = NULL;
+
+        mutex_lock(&lock_);
+        
+        old_buckets = buckets_;
+        cuckoo_status st = cuckoo_expand();
+
+        mutex_unlock(&lock_);
+
         if (st == ok) {
+            delete [] old_buckets;
             return true;
         } else {
             return false;
@@ -312,7 +308,12 @@ public:
     }
 
     void report() {
+
+        mutex_lock(&lock_);
+
         cuckoo_report();
+
+        mutex_unlock(&lock_);
     }
 
 
@@ -344,9 +345,6 @@ private:
 
     /* 2**hashpower is the number of buckets */
     volatile size_t hashpower_;
-
-    /* the mask for bucket index */
-    //size_t hashmask_;
 
     /* pointer to the array of buckets */
     Bucket* buckets_;
@@ -422,9 +420,9 @@ private:
         }
 
         /*
-         * even it shows "non-empty", it could be a false alert
+         * even it shows "non-empty", it could be a false alert during expansion
          */
-        if (expanding_) {
+        if (expanding_ && i >= cleaned_buckets_) {
             // when we are expanding
             // we could leave keys in their old but wrong buckets
             uint32_t hv = hashed_key(buckets_[i].keys[j]);
@@ -440,7 +438,7 @@ private:
     }
 
     typedef struct  {
-        size_t   buckets_[NUM_CUCKOO_PATH];
+        size_t   buckets[NUM_CUCKOO_PATH];
         size_t   slots[NUM_CUCKOO_PATH];
         key_type keys[NUM_CUCKOO_PATH];
     }  CuckooRecord; //__attribute__((__packed__)) CuckooRecord;
@@ -471,7 +469,7 @@ private:
              */
             for (size_t idx = 0; idx < NUM_CUCKOO_PATH; idx++) {
                 size_t i, j;
-                i = curr->buckets_[idx];
+                i = curr->buckets[idx];
                 for (j = 0; j < SLOT_PER_BUCKET; j++) {
                     if (is_slot_empty(i, j)) {
                         curr->slots[idx] = j;
@@ -486,7 +484,7 @@ private:
                 uint32_t hv        = hashed_key(buckets_[i].keys[j]);
                 curr->slots[idx]   = j;
                 curr->keys[idx]    = buckets_[i].keys[j];
-                next->buckets_[idx] = alt_index(hv, i);
+                next->buckets[idx] = alt_index(hv, i);
             }
 
             num_kicks += NUM_CUCKOO_PATH;
@@ -519,9 +517,9 @@ private:
              */
             CuckooRecord *from = cuckoo_path + depth - 1;
             CuckooRecord *to   = cuckoo_path + depth;
-            size_t i1 = from->buckets_[idx];
+            size_t i1 = from->buckets[idx];
             size_t j1 = from->slots[idx];
-            size_t i2 = to->buckets_[idx];
+            size_t i2 = to->buckets[idx];
             size_t j2 = to->slots[idx];
 
             /*
@@ -572,9 +570,9 @@ private:
 
         for (size_t idx = 0; idx < NUM_CUCKOO_PATH; idx++) {
             if (idx < NUM_CUCKOO_PATH / 2) {
-                cuckoo_path[0].buckets_[idx] = i1;
+                cuckoo_path[0].buckets[idx] = i1;
             } else {
-                cuckoo_path[0].buckets_[idx] = i2;
+                cuckoo_path[0].buckets[idx] = i2;
             }
         }
 
@@ -590,7 +588,7 @@ private:
 
             int curr_depth = cuckoopath_move(cuckoo_path, depth, idx);
             if (0 == curr_depth) {
-                i = cuckoo_path[0].buckets_[idx];
+                i = cuckoo_path[0].buckets[idx];
                 done = true;
                 break;
             }
@@ -688,6 +686,12 @@ private:
         return false;
     }
 
+
+    //
+    // non-thread safe cuckoo hashing functions:
+    // cuckoo_find, cuckoo_insert, cuckoo_delete
+    // cuckoo_expand, cuckoo_report
+    //
 
     /**
      * @brief find key in bucket i1 and i2
@@ -820,7 +824,7 @@ private:
      *
      * @return
      */
-    void cuckoo_clean(const size_t size) {
+    cuckoo_status cuckoo_clean(const size_t size) {
         for (size_t ii = 0; ii < size; ii++) {
             size_t i = cleaned_buckets_;
             for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
@@ -840,59 +844,49 @@ private:
             if (cleaned_buckets_ == hashsize(hashpower_)) {
                 expanding_ = false;
                 DBG("table clean done, cleaned_buckets = %zu\n", cleaned_buckets_);
-                return;
+                return ok;
             }
         }
         //DBG("_cuckoo_clean: cleaned_buckets = %zu\n", h->cleaned_buckets);
     }
 
-    void cuckoo_init(const size_t hashtable_init) {
+    cuckoo_status cuckoo_init(const size_t hashtable_init) {
         hashpower_  = (hashtable_init > 0) ? hashtable_init : HASHPOWER_DEFAULT;
         tablesize_  = sizeof(Bucket) * hashsize(hashpower_);
-        hashitems_  = 0;
-        expanding_  = false;
+        buckets_    = new Bucket[hashsize(hashpower_)];
+        counters_   = new uint32_t[kNumCounters];
 
         pthread_mutex_init(&lock_, NULL);
 
-        buckets_  = new Bucket[hashsize(hashpower_)];
-        counters_ = new uint32_t[kNumCounters];
-
         cuckoo_clear();
+
+        return ok;
     }
 
 
-    void cuckoo_clear() {
-        mutex_lock(&lock_);
-
+    cuckoo_status cuckoo_clear() {
         for (size_t i = 0; i < hashsize(hashpower_); i++) {
             buckets_[i].flag = 0;
         }
         memset(counters_, 0, kNumCounters * sizeof(uint32_t));
-        expanding_ = false;
+        hashitems_  = 0;
+        expanding_  = false;
 
-        mutex_unlock(&lock_);
+        return ok;
     }
 
 
     cuckoo_status cuckoo_expand() {
         
-        mutex_lock(&lock_);
         if (expanding_) {
-            mutex_unlock(&lock_);
             //DBG("expansion is on-going\n", NULL);
             return failure_under_expansion;
         }
 
         expanding_ = true;
 
-        Bucket* old_buckets = buckets_;
         Bucket* new_buckets = new Bucket[hashsize(hashpower_) * 2];
         printf("current: power %zu, tablesize %zu\n", hashpower_, tablesize_);
-        /* if (!new_buckets) { */
-        /*     expanding = false; */
-        /*     mutex_unlock(&lock); */
-        /*     return failure_space_not_enough; */
-        /* } */
 
         memcpy(new_buckets, buckets_, tablesize_);
         memcpy(new_buckets + hashsize(hashpower_), buckets_, tablesize_);
@@ -904,18 +898,17 @@ private:
         hashpower_++;
         tablesize_ <<= 1;
         cleaned_buckets_ = 0;
-        mutex_unlock(&lock_);
-
-        delete [] old_buckets;
 
         return ok;
     }
 
-    void cuckoo_report() {
+    cuckoo_status cuckoo_report() {
         printf("total number of items %zu\n", hashitems_);
         printf("total size %zu Bytes, or %.2f MB\n", 
                tablesize_, (float) tablesize_ / (1 << 20));
         printf("load factor %.4f\n", load_factor());
+
+        return ok;
     }
 
 };
