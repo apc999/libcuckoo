@@ -200,8 +200,8 @@ static void *insert_thread(void *arg) {
     pthread_exit(NULL);
 }
 
-static void usage(char* myname) {
-    printf("%s:\ttest cuckoo hash table with multiple threads\n", myname);
+static void usage() {
+    printf("test_cuckoo_mt:\ttest cuckoo hash table with multiple threads\n");
     printf("\t-r #: the number of readers\n");
     printf("\t-w #: the number of writers\n");
     printf("\t-p #: the initial powerhash\n");
@@ -224,9 +224,9 @@ int main(int argc, char** argv)
         case 'w': num_writers = atoi(optarg); break;
         case 'r': num_readers = atof(optarg); break;
         case 'p': power       = atof(optarg); break;
-        case 'h': usage(argv[0]); exit(0); break;
+        case 'h': usage(); exit(0); break;
         default:
-            usage(argv[0]);
+            usage();
             exit(-1);
         }
     }

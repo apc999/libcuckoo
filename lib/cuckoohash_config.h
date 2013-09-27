@@ -29,7 +29,7 @@
 /* 
  * set DEBUG to 1 to enable debug output 
  */
-#define DEBUG 1
+#define DEBUG 0
 
 
 #endif
