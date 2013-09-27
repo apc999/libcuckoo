@@ -12,6 +12,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <math.h>
+#include <ctime>
 #include <sys/time.h>
 #include <algorithm>
 
@@ -95,9 +96,6 @@ void* exec_thread(void* p) {
 
 int main(int argc, char **argv)
 {
-
-
-
     int ch;
 
     while ((ch = getopt(argc, argv, "p:q:t:d:h")) != -1) {
@@ -150,19 +148,21 @@ int main(int argc, char **argv)
 
     td = time_now() - ts;
 
-    printf("[bench] num_inserted = %zu\n", ninserted );
-    printf("[bench] insert_time = %.2f seconds\n", td );
-    printf("[bench] insert_tput = %.2f MOPS\n", ninserted / td / MILLION);
+    printf("[bench] num_inserted = %zu (%.2f M)\n", 
+           ninserted, (double) ninserted / MILLION);
+    printf("[bench] insert_time  = %.2f seconds\n", td );
+    printf("[bench] insert_tput  = %.2f M items / sec\n", ninserted / td / MILLION);
 
     table->report();
 
     std::mt19937_64 rng;
-    //rng.seed(static_cast<unsigned int>(std::time(0)));
-    rng.seed(123456);
-
-    size_t* queries = new size_t[nq];
+    rng.seed(static_cast<unsigned int>(std::time(0)));
+    //rng.seed(123456);
+    std::uniform_int_distribution<int> unif(0, ninserted - 1);
+    
+	size_t* queries = new size_t[nq];
     for (size_t i = 0; i < nq; i++) {
-        queries[i] = rng() % ninserted;
+        queries[i] = unif(rng);
     }
 
     printf("[bench] looking up keys in the hash table\n");
@@ -175,13 +175,13 @@ int main(int argc, char **argv)
     for (size_t i = 0; i < nt; i++) {
         tp[i].tid = i;
         tp[i].queries = queries;
-#ifdef __linux__
-        size_t c = 2 * i + 1 ; //assign_core(i);
-        cpu_set_t cpuset;
-        CPU_ZERO(&cpuset);
-        CPU_SET(c, &cpuset);
-        pthread_attr_setaffinity_np(&attr, sizeof(cpu_set_t), &cpuset);
-#endif
+// #ifdef __linux__
+//         size_t c = 2 * i + 1 ; //assign_core(i);
+//         cpu_set_t cpuset;
+//         CPU_ZERO(&cpuset);
+//         CPU_SET(c, &cpuset);
+//         pthread_attr_setaffinity_np(&attr, sizeof(cpu_set_t), &cpuset);
+// #endif
         int rc = pthread_create(&threads[i],  &attr, exec_thread, (void*) &(tp[i]));
         if (rc) {
             perror("error, pthread_create\n");
@@ -194,16 +194,13 @@ int main(int argc, char **argv)
         pthread_join(threads[i], NULL);
         total_tput += tp[i].tput;
         junk ^= tp[i].junk;
-        //if (verbose) 
-        {
-            printf("[thread%zu] %.2f sec, cpu %zu, tput %.2f MOPS\n", 
+        printf("[thread%zu] %.2f sec, cpu %zu, tput %.2f MOPS\n", 
                    i, tp[i].time, tp[i].cpu, tp[i].tput / MILLION);
-        }
     }
 
     printf("[bench] num_queries = %zu (%.2f M)\n", nq, (float) nq / MILLION);
     printf("[bench] lookup_time = %.4lf seconds\n", td);
-    printf("[bench] lookup_tput = %.4lf M items / seconds\n", (double) total_tput / MILLION);
+    printf("[bench] lookup_tput = %.4lf M items / sec\n", (double) total_tput / MILLION);
     printf("[bench] ignore this line %u\n", junk);
 
     return 0;
