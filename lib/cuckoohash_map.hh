@@ -1,7 +1,10 @@
-#ifndef _CUCKOOHASH_MAP_H
-#define _CUCKOOHASH_MAP_H
+#ifndef _CUCKOOHASH_MAP_HH
+#define _CUCKOOHASH_MAP_HH
 #include <functional>  // for std::hash
 #include <utility>     // for std::pair
+#include <stdexcept>
+#include <cstring>
+#include <cassert>
 
 #include "cuckoohash_config.h"
 #include "cuckoohash_util.h"
@@ -31,7 +34,7 @@ typedef enum {
 } cuckoo_status;
 
 
-template <class Key, 
+template <class Key,
           class T,
           class Hash = std::hash<Key> >
     struct cuckoohash_map_iterator  {
@@ -106,8 +109,8 @@ public:
  };
 
 
-template <class Key, 
-          class T, 
+template <class Key,
+          class T,
           class Hash = std::hash<Key> >
     class cuckoohash_map {
 public:
@@ -293,7 +296,7 @@ public:
         Bucket* old_buckets = NULL;
 
         mutex_lock(&lock_);
-        
+
         old_buckets = buckets_;
         cuckoo_status st = cuckoo_expand();
 
@@ -349,7 +352,7 @@ private:
     /* pointer to the array of buckets */
     Bucket* buckets_;
 
-    /* the array of version counters 
+    /* the array of version counters
      * we keep keyver_count = 8192
      */
     uint32_t* counters_;
@@ -413,7 +416,7 @@ private:
         assert(j < SLOT_PER_BUCKET);
         set_bit(&buckets_[i].flag, j, 0);
     }
-    
+
     bool is_slot_empty(const size_t i,const size_t j) {
         if (0 == get_slot_flag(i, j)) {
             return true;
@@ -795,7 +798,7 @@ private:
      * @brief update the value of key to val in bucket i1 or i2
      *        the lock should be acquired by the caller
      *
-     * @param key the key to update     
+     * @param key the key to update
      * @param val the new value
      * @param i1  1st bucket index
      * @param i2  2nd bucket index
@@ -877,7 +880,7 @@ private:
 
 
     cuckoo_status cuckoo_expand() {
-        
+
         if (expanding_) {
             //DBG("expansion is on-going\n", NULL);
             return failure_under_expansion;
@@ -904,11 +907,299 @@ private:
 
     cuckoo_status cuckoo_report() {
         printf("total number of items %zu\n", hashitems_);
-        printf("total size %zu Bytes, or %.2f MB\n", 
+        printf("total size %zu Bytes, or %.2f MB\n",
                tablesize_, (float) tablesize_ / (1 << 20));
         printf("load factor %.4f\n", load_factor());
 
         return ok;
+    }
+
+public:
+    /* An iterator through the table that is thread safe. For the
+     * duration of its existence, it takes a write lock on the table,
+     * thereby ensuring that no other threads can modify the table
+     * while the iterator is in use. It allows movement forward and
+     * backward through the table as well as dereferencing items in
+     * the table. We maintain the assertion that an iterator is either
+     * an end iterator (which points past the end of the table), or it
+     * points to a filled slot. As soon as the iterator looses it's
+     * lock on the table, all operations will throw an exception. */
+    class threadsafe_iterator {
+    public:
+
+        // Returns true if the iterator is at end_pos
+        bool is_end() {
+            return (index_ == end_pos.first && slot_ == end_pos.second);
+        }
+
+        // Returns true if the iterator is at begin_pos
+        bool is_begin() {
+            return (index_ == begin_pos.first && slot_ == begin_pos.second);
+        }
+
+        // Takes the lock, calculates end_pos and begin_pos, and sets
+        // index and slot to the beginning or end of the table, based
+        // on the boolean argument
+        threadsafe_iterator(cuckoohash_map<Key, T, Hash> *hm, pthread_mutex_t *table_lock, Bucket *table_buckets, bool is_end) {
+            hm_ = hm;
+            table_lock_ = table_lock;
+            table_buckets_ = table_buckets;
+            mutex_lock(table_lock_);
+            has_table_lock = true;
+            set_end(end_pos.first, end_pos.second);
+            set_begin(begin_pos.first, begin_pos.second);
+            if (is_end) {
+                index_ = end_pos.first;
+                slot_ = end_pos.second;
+            } else {
+                index_ = begin_pos.first;
+                slot_ = begin_pos.second;
+            }
+        }
+
+        threadsafe_iterator(threadsafe_iterator&& it) {
+            if (this == &it) {
+                return;
+            }
+            memcpy(this, &it, sizeof(threadsafe_iterator));
+            it.has_table_lock = false;
+        }
+
+        threadsafe_iterator* operator=(threadsafe_iterator&& it) {
+            if (this == &it) {
+                return this;
+            }
+            memcpy(this, &it, sizeof(threadsafe_iterator));
+            it.has_table_lock = false;
+            return this;
+        }
+
+        // Releases the lock on the table, thereby freeing the table,
+        // but also invalidating all future operations with this
+        // iterator
+        void release() {
+            if (has_table_lock) {
+                mutex_unlock(table_lock_);
+                has_table_lock = false;
+            }
+        }
+
+        ~threadsafe_iterator() {
+            release();
+        }
+
+        // We return a copy of the data in the buckets, so that any
+        // modification to the returned value_type doesn't affect the
+        // table itself. This is also the reason we don't have a ->
+        // operator.
+        value_type operator*() {
+            check_lock();
+            if (is_end()) {
+                throw std::runtime_error(end_dereference);
+            }
+            assert(!hm_->is_slot_empty(index_, slot_));
+            return value_type(table_buckets_[index_].keys[slot_], table_buckets_[index_].vals[slot_]);
+        }
+
+        // Sets the value pointed to by the iterator. This involves
+        // modifying the hash table itself, but since we have a lock
+        // on the table, we are okay. Since we are only changing the
+        // value in the bucket, the element will retain it's position,
+        // so this is just a simple assignment.
+        void set_value(const mapped_type val) {
+            check_lock();
+            if (is_end()) {
+                throw std::runtime_error(end_dereference);
+            }
+            assert(!hm_->is_slot_empty(index_, slot_));
+            table_buckets_[index_].vals[slot_] = val;
+        }
+
+        // Moves forwards to the next nonempty slot. If it reaches the
+        // end of the table, it becomes an end iterator.
+        threadsafe_iterator* operator++() {
+            check_lock();
+            if (is_end()) {
+                throw std::runtime_error(end_increment);
+            }
+            forward_filled_slot(index_, slot_);
+            return this;
+        }
+        threadsafe_iterator* operator++(int) {
+            check_lock();
+            if (is_end()) {
+                throw std::runtime_error(end_increment);
+            }
+            forward_filled_slot(index_, slot_);
+            return this;
+        }
+
+        // Moves backwards to the next nonempty slot. If we aren't at
+        // the beginning, then the backward_filled_slot operation should
+        // not fail.
+        threadsafe_iterator* operator--() {
+            check_lock();
+            if (is_begin()) {
+                throw std::runtime_error(begin_decrement);
+            }
+            bool res = backward_filled_slot(index_, slot_);
+            assert(res);
+            return this;
+        }
+        threadsafe_iterator* operator--(int) {
+            check_lock();
+            if (is_begin()) {
+                throw std::runtime_error(begin_decrement);
+            }
+            bool res = backward_filled_slot(index_, slot_);
+            assert(res);
+            return this;
+        }
+
+
+    private:
+
+        /* A pointer to the associated hashmap */
+        cuckoohash_map<Key, T, Hash> *hm_;
+
+        /* A pointer to the hashmap's lock */
+        pthread_mutex_t *table_lock_;
+
+        /* The hashmap's buckets */
+        Bucket *table_buckets_;
+
+        /* Indicates whether the iterator has the table lock */
+        bool has_table_lock;
+
+        /* Indicates the bucket and slot of the end iterator, which is
+         * one past the end of the table. This is determined upon
+         * initializing the iterator */
+        std::pair<size_t, size_t> end_pos;
+
+        /* Indicates the bucket and slot of the first filled position
+         * in the table. This is determined upon initializing the
+         * iterator. If the table is empty, it points past the end of
+         * the table, to the same value as end_pos */
+        std::pair<size_t, size_t> begin_pos;
+
+        /* The bucket index of the item being pointed to */
+        size_t index_;
+
+        /* The slot in the bucket of the item being pointed to */
+        size_t slot_;
+
+        // Sets the given index and slot to one past the last position
+        // in the table
+        void set_end(size_t& index, size_t& slot) {
+            index = hm_->bucket_count();
+            slot = 0;
+        }
+
+        // Sets the given pair to the position of the first element in
+        // the table.
+        void set_begin(size_t& index, size_t& slot) {
+            if (hm_->size() == 0) {
+                // Initializes begin_pos to past the end of the table
+                set_end(index, slot);
+            } else {
+                index = slot = 0;
+                // There must be a filled slot somewhere in the table
+                if (hm_->is_slot_empty(index, slot)) {
+                    bool res = forward_filled_slot(index, slot);
+                    assert(res);
+                }
+                // index and slot now point to the first filled
+                // element
+            }
+        }
+
+        // Moves the given index and slot to the next available slot
+        // in the forwards direction. Returns true if it successfully
+        // advances, and false if it has reached the end of the table,
+        // in which case it sets index and slot to end_pos
+        bool forward_slot(size_t& index, size_t& slot) {
+            if (slot < SLOT_PER_BUCKET-1) {
+                ++slot;
+                return true;
+            } else if (index < hm_->bucket_count()-1) {
+                ++index;
+                slot = 0;
+                return true;
+            } else {
+                set_end(index, slot);
+                return false;
+            }
+        }
+
+        // Moves index and slot to the next available slot in the
+        // backwards direction. Returns true if it successfully
+        // advances, and false if it has reached the beginning of the
+        // table, setting the index and slot back to begin_pos
+        bool backward_slot(size_t& index, size_t& slot) {
+            if (slot > 0) {
+                --slot;
+                return true;
+            } else if (index > 0) {
+                --index;
+                slot = SLOT_PER_BUCKET-1;
+                return true;
+            } else {
+                set_begin(index, slot);
+                return false;
+            }
+        }
+
+        // Moves index and slot to the next filled slot.
+        bool forward_filled_slot(size_t& index, size_t& slot) {
+            bool res = forward_slot(index, slot);
+            if (!res) {
+                return false;
+            }
+            while (hm_->is_slot_empty(index, slot)) {
+                res = forward_slot(index, slot);
+                if (!res) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        // Moves index and slot to the previous filled slot.
+        bool backward_filled_slot(size_t& index, size_t& slot) {
+            bool res = backward_slot(index, slot);
+            if (!res) {
+                return false;
+            }
+            while (hm_->is_slot_empty(index, slot)) {
+                res = backward_slot(index, slot);
+                if (!res) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        static constexpr const char* unlocked_errmsg = "Iterator does not have a lock on the table";
+        void check_lock() {
+            if (!has_table_lock) {
+                throw std::runtime_error(unlocked_errmsg);
+            }
+        }
+
+        static constexpr const char* end_dereference = "Cannot dereference: iterator points past the end of the table";
+        static constexpr const char* end_increment = "Cannot increment: iterator points past the end of the table";
+        static constexpr const char* begin_decrement = "Cannot decrement: iterator points to the beginning of the table";
+    };
+
+    // Returns a threadsafe_iterator to the beginning of the table,
+    // locking the table in the process
+    threadsafe_iterator threadsafe_begin() {
+        return threadsafe_iterator(this, &lock_, buckets_, false);
+    }
+
+    // Returns a threadsafe_iterator to the end of the table,
+    // locking the table in the process
+    threadsafe_iterator threadsafe_end() {
+        return threadsafe_iterator(this, &lock_, buckets_, true);
     }
 
 };

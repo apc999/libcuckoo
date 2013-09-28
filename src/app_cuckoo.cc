@@ -26,7 +26,7 @@
 #include <string>
 #include <sstream>
 
-#include "cuckoohash_map.h"
+#include "cuckoohash_map.hh"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
 
 int main(int argc, char** argv) 
