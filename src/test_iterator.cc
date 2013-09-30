@@ -1,9 +1,10 @@
-/* A simple example of iterating through a cuckoo hash table with a
- * threadsafe iterator */
+/* A simple example of iterating through and modifying a cuckoo hash
+ * table with the various iterator and snapshot features */
 
 #include <iostream>
 #include <cstdint>
 #include <algorithm>
+#include <utility>
 
 #include "cuckoohash_map.hh"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
@@ -36,12 +37,12 @@ int main() {
         Table table(power);
 
         std::cout << "Begin iterator" << std::endl;
-        Table::threadsafe_iterator t = table.threadsafe_begin();
+        Table::const_threadsafe_iterator t = table.const_threadsafe_begin();
         check_cond(t.is_begin() && t.is_end(), "Begin iterator on empty table is not beginning and end");
 
         std::cout << "Move assignment to end iterator" << std::endl;
         t.release();
-        t = table.threadsafe_end();
+        t = table.const_threadsafe_end();
         check_cond(t.is_begin() && t.is_end(), "End iterator on empty table is not beginning and end");
         t.release();
 
@@ -58,7 +59,7 @@ int main() {
 
         std::pair<KeyType, ValueType> p;
         std::cout << "Iterating forwards through the table" << std::endl;
-        t = table.threadsafe_begin();
+        t = table.const_threadsafe_begin();
         while (!t.is_end()) {
                 p = *t;
                 check_item(items, items+size, p);
@@ -74,16 +75,35 @@ int main() {
         }
         p = *t;
 
+        std::cout << "Checking table snapshot" << std::endl;
+        t.release();
+        Table::value_type *snapshot_items = table.snapshot_table();
+        for (int i = 0; i < table.size(); i++) {
+                check_item(items, items+size, snapshot_items[i]);
+        }
+        delete[] snapshot_items;
+
         std::cout << "Incrementing the values of each element in the table" << std::endl;
         for (size_t i = 0; i < size; i++) {
                 items[i].second++;
         }
-        while (!t.is_end()) {
-                p = *t;
-                t.set_value(p.second+1);
-                check_item(items, items+size, *t);
-                t++;
+        // Also tests casting from a const iterator to a mutable one
+        Table::threadsafe_iterator t_mut = static_cast<Table::threadsafe_iterator>(table.const_threadsafe_begin());
+        while (!t_mut.is_end()) {
+                p = *t_mut;
+                t_mut.set_value(p.second+1);
+                check_item(items, items+size, *t_mut);
+                t_mut++;
         }
+
+        std::cout << "Checking table snapshot" << std::endl;
+        t_mut.release();
+        snapshot_items = table.snapshot_table();
+        for (int i = 0; i < table.size(); i++) {
+                check_item(items, items+size, snapshot_items[i]);
+        }
+        delete[] snapshot_items;
+
 
         if (failures == 0) {
                 std::cout << "[PASSED]" << std::endl;

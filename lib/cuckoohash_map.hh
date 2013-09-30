@@ -924,7 +924,7 @@ public:
      * an end iterator (which points past the end of the table), or it
      * points to a filled slot. As soon as the iterator looses it's
      * lock on the table, all operations will throw an exception. */
-    class threadsafe_iterator {
+    class const_threadsafe_iterator {
     public:
 
         // Returns true if the iterator is at end_pos
@@ -940,7 +940,7 @@ public:
         // Takes the lock, calculates end_pos and begin_pos, and sets
         // index and slot to the beginning or end of the table, based
         // on the boolean argument
-        threadsafe_iterator(cuckoohash_map<Key, T, Hash> *hm, pthread_mutex_t *table_lock, Bucket *table_buckets, bool is_end) {
+        const_threadsafe_iterator(cuckoohash_map<Key, T, Hash> *hm, pthread_mutex_t *table_lock, Bucket *table_buckets, bool is_end) {
             hm_ = hm;
             table_lock_ = table_lock;
             table_buckets_ = table_buckets;
@@ -957,19 +957,19 @@ public:
             }
         }
 
-        threadsafe_iterator(threadsafe_iterator&& it) {
+        const_threadsafe_iterator(const_threadsafe_iterator&& it) {
             if (this == &it) {
                 return;
             }
-            memcpy(this, &it, sizeof(threadsafe_iterator));
+            memcpy(this, &it, sizeof(const_threadsafe_iterator));
             it.has_table_lock = false;
         }
 
-        threadsafe_iterator* operator=(threadsafe_iterator&& it) {
+        const_threadsafe_iterator* operator=(const_threadsafe_iterator&& it) {
             if (this == &it) {
                 return this;
             }
-            memcpy(this, &it, sizeof(threadsafe_iterator));
+            memcpy(this, &it, sizeof(const_threadsafe_iterator));
             it.has_table_lock = false;
             return this;
         }
@@ -984,7 +984,7 @@ public:
             }
         }
 
-        ~threadsafe_iterator() {
+        ~const_threadsafe_iterator() {
             release();
         }
 
@@ -1001,23 +1001,9 @@ public:
             return value_type(table_buckets_[index_].keys[slot_], table_buckets_[index_].vals[slot_]);
         }
 
-        // Sets the value pointed to by the iterator. This involves
-        // modifying the hash table itself, but since we have a lock
-        // on the table, we are okay. Since we are only changing the
-        // value in the bucket, the element will retain it's position,
-        // so this is just a simple assignment.
-        void set_value(const mapped_type val) {
-            check_lock();
-            if (is_end()) {
-                throw std::runtime_error(end_dereference);
-            }
-            assert(!hm_->is_slot_empty(index_, slot_));
-            table_buckets_[index_].vals[slot_] = val;
-        }
-
         // Moves forwards to the next nonempty slot. If it reaches the
         // end of the table, it becomes an end iterator.
-        threadsafe_iterator* operator++() {
+        const_threadsafe_iterator* operator++() {
             check_lock();
             if (is_end()) {
                 throw std::runtime_error(end_increment);
@@ -1025,7 +1011,7 @@ public:
             forward_filled_slot(index_, slot_);
             return this;
         }
-        threadsafe_iterator* operator++(int) {
+        const_threadsafe_iterator* operator++(int) {
             check_lock();
             if (is_end()) {
                 throw std::runtime_error(end_increment);
@@ -1037,7 +1023,7 @@ public:
         // Moves backwards to the next nonempty slot. If we aren't at
         // the beginning, then the backward_filled_slot operation should
         // not fail.
-        threadsafe_iterator* operator--() {
+        const_threadsafe_iterator* operator--() {
             check_lock();
             if (is_begin()) {
                 throw std::runtime_error(begin_decrement);
@@ -1046,7 +1032,7 @@ public:
             assert(res);
             return this;
         }
-        threadsafe_iterator* operator--(int) {
+        const_threadsafe_iterator* operator--(int) {
             check_lock();
             if (is_begin()) {
                 throw std::runtime_error(begin_decrement);
@@ -1057,7 +1043,7 @@ public:
         }
 
 
-    private:
+    protected:
 
         /* A pointer to the associated hashmap */
         cuckoohash_map<Key, T, Hash> *hm_;
@@ -1188,16 +1174,77 @@ public:
         static constexpr const char* end_dereference = "Cannot dereference: iterator points past the end of the table";
         static constexpr const char* end_increment = "Cannot increment: iterator points past the end of the table";
         static constexpr const char* begin_decrement = "Cannot decrement: iterator points to the beginning of the table";
+
     };
 
-    // Returns a threadsafe_iterator to the beginning of the table,
+    // Returns a const_threadsafe_iterator to the beginning of the table,
     // locking the table in the process
+    const_threadsafe_iterator const_threadsafe_begin() {
+        return const_threadsafe_iterator(this, &lock_, buckets_, false);
+    }
+
+    // Returns a const_threadsafe_iterator to the end of the table
+    const_threadsafe_iterator const_threadsafe_end() {
+        return const_threadsafe_iterator(this, &lock_, buckets_, true);
+    }
+
+    // Using a const_threadsafe_iterator, it allocates an array and
+    // stores all the elements currently in the table, returning the
+    // array.
+    value_type* snapshot_table() {
+        value_type* items = new value_type[size()];
+        size_t ind = 0;
+        const_threadsafe_iterator it = const_threadsafe_begin();
+        while (!it.is_end()) {
+            items[ind++] = *it;
+            it++;
+        }
+        return items;
+    }
+
+    /* A threadsafe_iterator is just a const_threadsafe_iterator with
+     * an update method */
+    class threadsafe_iterator : public const_threadsafe_iterator {
+    public:
+        threadsafe_iterator(cuckoohash_map<Key, T, Hash> *hm, pthread_mutex_t *table_lock, Bucket *table_buckets, bool is_end)
+            : const_threadsafe_iterator(hm, table_lock, table_buckets, is_end) {}
+        threadsafe_iterator(threadsafe_iterator&& it)
+            : const_threadsafe_iterator(std::forward<const_threadsafe_iterator>(it)) {}
+        threadsafe_iterator(const_threadsafe_iterator&& it)
+            : const_threadsafe_iterator(std::forward<const_threadsafe_iterator>(it)) {
+            printf("CALLED\n");
+        }
+
+        threadsafe_iterator* operator=(threadsafe_iterator&& it) {
+            if (this == &it) {
+                return this;
+            }
+            memcpy(this, &it, sizeof(threadsafe_iterator));
+            it.has_table_lock = false;
+            return this;
+        }
+
+        // Sets the value pointed to by the iterator. This involves
+        // modifying the hash table itself, but since we have a lock
+        // on the table, we are okay. Since we are only changing the
+        // value in the bucket, the element will retain it's position,
+        // so this is just a simple assignment.
+        void set_value(const mapped_type val) {
+            this->check_lock();
+            if (this->is_end()) {
+                throw std::runtime_error(this->end_dereference);
+            }
+            assert(!hm_->is_slot_empty(this->index_, this->slot_));
+            this->table_buckets_[this->index_].vals[this->slot_] = val;
+        }
+    };
+
+    // Returns a threadsafe_iterator to the beginning of the table
     threadsafe_iterator threadsafe_begin() {
         return threadsafe_iterator(this, &lock_, buckets_, false);
     }
 
-    // Returns a threadsafe_iterator to the end of the table,
-    // locking the table in the process
+    // Returns a threadsafe_iterator to the end of the table
     threadsafe_iterator threadsafe_end() {
         return threadsafe_iterator(this, &lock_, buckets_, true);
     }
