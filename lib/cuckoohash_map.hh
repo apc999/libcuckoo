@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <cassert>
+#include <pthread.h>
 
 #include "cuckoohash_config.h"
 #include "cuckoohash_util.h"
@@ -1234,7 +1235,7 @@ public:
             if (this->is_end()) {
                 throw std::runtime_error(this->end_dereference);
             }
-            assert(!hm_->is_slot_empty(this->index_, this->slot_));
+            assert(!this->hm_->is_slot_empty(this->index_, this->slot_));
             this->table_buckets_[this->index_].vals[this->slot_] = val;
         }
     };
