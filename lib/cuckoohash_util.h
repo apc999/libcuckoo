@@ -48,39 +48,39 @@
  * @brief Atomic increase the counter
  *
  */
-#define start_incr_counter(idx)                                     \
-    do {                                                            \
-        ((volatile uint32_t *)counters_)[idx & counter_mask]++;      \
-        reorder_barrier();                                          \
-    } while(0)
-
-#define end_incr_counter(idx)                                       \
-    do {                                                            \
-        reorder_barrier();                                          \
-        ((volatile uint32_t *)counters_)[idx & counter_mask]++;      \
-    } while(0)
-
-
-#define start_incr_counter2(i1, i2)                                     \
+#define start_incr_counter(idx)                                         \
     do {                                                                \
-        if (likely((i1 & counter_mask) != (i2 & counter_mask))) {       \
-            ((volatile uint32_t *)counters_)[i1 & counter_mask]++;       \
-            ((volatile uint32_t *)counters_)[i2 & counter_mask]++;       \
-        } else {                                                        \
-            ((volatile uint32_t *)counters_)[i1 & counter_mask]++;       \
-        }                                                               \
+        ((volatile uint32_t *)counters_.get())[idx & counter_mask]++;   \
         reorder_barrier();                                              \
     } while(0)
 
-#define end_incr_counter2(i1, i2)                                       \
+#define end_incr_counter(idx)                                           \
     do {                                                                \
         reorder_barrier();                                              \
-        if (likely((i1 & counter_mask) != (i2 & counter_mask))) {       \
-            ((volatile uint32_t *)counters_)[i1 & counter_mask]++;       \
-            ((volatile uint32_t *)counters_)[i2 & counter_mask]++;       \
-        } else {                                                        \
-            ((volatile uint32_t *)counters_)[i1 & counter_mask]++;       \
-        }                                                               \
+        ((volatile uint32_t *)counters_.get())[idx & counter_mask]++;   \
+    } while(0)
+
+
+#define start_incr_counter2(i1, i2)                                      \
+    do {                                                                 \
+        if (likely((i1 & counter_mask) != (i2 & counter_mask))) {        \
+            ((volatile uint32_t *)counters_.get())[i1 & counter_mask]++; \
+            ((volatile uint32_t *)counters_.get())[i2 & counter_mask]++; \
+        } else {                                                         \
+            ((volatile uint32_t *)counters_.get())[i1 & counter_mask]++; \
+        }                                                                \
+        reorder_barrier();                                               \
+    } while(0)
+
+#define end_incr_counter2(i1, i2)                                        \
+    do {                                                                 \
+        reorder_barrier();                                               \
+        if (likely((i1 & counter_mask) != (i2 & counter_mask))) {        \
+            ((volatile uint32_t *)counters_.get())[i1 & counter_mask]++; \
+            ((volatile uint32_t *)counters_.get())[i2 & counter_mask]++; \
+        } else {                                                         \
+            ((volatile uint32_t *)counters_.get())[i1 & counter_mask]++; \
+        }                                                                \
     } while(0)
 
 

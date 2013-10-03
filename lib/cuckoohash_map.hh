@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cassert>
 #include <pthread.h>
+#include <memory>
 
 #include "cuckoohash_config.h"
 #include "cuckoohash_util.h"
@@ -132,8 +133,6 @@ public:
 
     ~cuckoohash_map() {
         pthread_mutex_destroy(&lock_);
-        delete [] buckets_;
-        delete [] counters_;
     }
 
     void clear() {
@@ -294,21 +293,11 @@ public:
 
     bool expand() {
 
-        Bucket* old_buckets = NULL;
-
         mutex_lock(&lock_);
-
-        old_buckets = buckets_;
         cuckoo_status st = cuckoo_expand();
-
         mutex_unlock(&lock_);
 
-        if (st == ok) {
-            delete [] old_buckets;
-            return true;
-        } else {
-            return false;
-        }
+        return (st == ok);
     }
 
     void report() {
@@ -350,13 +339,13 @@ private:
     /* 2**hashpower is the number of buckets */
     volatile size_t hashpower_;
 
-    /* pointer to the array of buckets */
-    Bucket* buckets_;
+    /* unique pointer to the array of buckets */
+    std::unique_ptr<Bucket[]> buckets_;
 
-    /* the array of version counters
+    /* the unique_ptr array of version counters
      * we keep keyver_count = 8192
      */
-    uint32_t* counters_;
+    std::unique_ptr<uint32_t[]> counters_;
 
     /* the mutex to serialize insert, delete, expand */
     pthread_mutex_t lock_;
@@ -857,8 +846,8 @@ private:
     cuckoo_status cuckoo_init(const size_t hashtable_init) {
         hashpower_  = (hashtable_init > 0) ? hashtable_init : HASHPOWER_DEFAULT;
         tablesize_  = sizeof(Bucket) * hashsize(hashpower_);
-        buckets_    = new Bucket[hashsize(hashpower_)];
-        counters_   = new uint32_t[kNumCounters];
+        buckets_    = std::move(std::unique_ptr<Bucket[]>(new Bucket[hashsize(hashpower_)]));
+        counters_   = std::move(std::unique_ptr<uint32_t[]>(new uint32_t[kNumCounters]));
 
         pthread_mutex_init(&lock_, NULL);
 
@@ -872,7 +861,7 @@ private:
         for (size_t i = 0; i < hashsize(hashpower_); i++) {
             buckets_[i].flag = 0;
         }
-        memset(counters_, 0, kNumCounters * sizeof(uint32_t));
+        memset(counters_.get(), 0, kNumCounters * sizeof(uint32_t));
         hashitems_  = 0;
         expanding_  = false;
 
@@ -889,13 +878,13 @@ private:
 
         expanding_ = true;
 
-        Bucket* new_buckets = new Bucket[hashsize(hashpower_) * 2];
+        std::unique_ptr<Bucket[]> new_buckets(new Bucket[hashsize(hashpower_) * 2]);
         printf("current: power %zu, tablesize %zu\n", hashpower_, tablesize_);
 
-        memcpy(new_buckets, buckets_, tablesize_);
-        memcpy(new_buckets + hashsize(hashpower_), buckets_, tablesize_);
+        memcpy(new_buckets.get(), buckets_.get(), tablesize_);
+        memcpy(new_buckets.get() + hashsize(hashpower_), buckets_.get(), tablesize_);
 
-        buckets_ = new_buckets;
+        buckets_ = std::move(new_buckets);
 
         reorder_barrier();
 
@@ -1181,12 +1170,12 @@ public:
     // Returns a const_threadsafe_iterator to the beginning of the table,
     // locking the table in the process
     const_threadsafe_iterator const_threadsafe_begin() {
-        return const_threadsafe_iterator(this, &lock_, buckets_, false);
+        return const_threadsafe_iterator(this, &lock_, buckets_.get(), false);
     }
 
     // Returns a const_threadsafe_iterator to the end of the table
     const_threadsafe_iterator const_threadsafe_end() {
-        return const_threadsafe_iterator(this, &lock_, buckets_, true);
+        return const_threadsafe_iterator(this, &lock_, buckets_.get(), true);
     }
 
     // Using a const_threadsafe_iterator, it allocates an array and
@@ -1242,12 +1231,12 @@ public:
 
     // Returns a threadsafe_iterator to the beginning of the table
     threadsafe_iterator threadsafe_begin() {
-        return threadsafe_iterator(this, &lock_, buckets_, false);
+        return threadsafe_iterator(this, &lock_, buckets_.get(), false);
     }
 
     // Returns a threadsafe_iterator to the end of the table
     threadsafe_iterator threadsafe_end() {
-        return threadsafe_iterator(this, &lock_, buckets_, true);
+        return threadsafe_iterator(this, &lock_, buckets_.get(), true);
     }
 
 };

@@ -6,10 +6,15 @@ noinst_LIBRARIES = libgtest.a libgtest_main.a
 libgtest_a_SOURCES = $(GTEST_DIR)/src/gtest-all.cc
 libgtest_main_a_SOURCES = $(GTEST_DIR)/src/gtest_main.cc $(GTEST_DIR)/src/gtest-all.cc
 
-noinst_PROGRAMS = test_insert.out
-test_insert_out_SOURCES = test_insert.cc
-test_insert_out_LDFLAGS = $(testLDFLAGS)
-test_insert_out_DEPENDENCIES = $(testDEPS)
+noinst_PROGRAMS = test_insert_and_find.out test_iterator.out
+
+test_insert_and_find_out_SOURCES = test_insert_and_find.cc
+test_insert_and_find_out_LDFLAGS = $(testLDFLAGS)
+test_insert_and_find_out_DEPENDENCIES = $(testDEPS)
+
+test_iterator_out_SOURCES = test_iterator.cc
+test_iterator_out_LDFLAGS = $(testLDFLAGS)
+test_iterator_out_DEPENDENCIES = $(testDEPS)
 
 AM_CFLAGS = -g -Wall -Wextra -pthread
 AM_CPPFLAGS = -std=c++0x -I$(top_srcdir)/lib -isystem $(GTEST_DIR)/include -I$(GTEST_DIR)
