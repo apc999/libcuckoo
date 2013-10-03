@@ -922,7 +922,7 @@ public:
      * backward through the table as well as dereferencing items in
      * the table. We maintain the assertion that an iterator is either
      * an end iterator (which points past the end of the table), or it
-     * points to a filled slot. As soon as the iterator looses it's
+     * points to a filled slot. As soon as the iterator looses its
      * lock on the table, all operations will throw an exception. */
     class const_threadsafe_iterator {
     public:
