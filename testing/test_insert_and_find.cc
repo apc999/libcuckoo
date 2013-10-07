@@ -28,7 +28,7 @@ protected:
         : smalltable(power), bigtable(power + 1) {}
 
     virtual void SetUp() {
-        // Initializing the hash tables
+        // Sets up the random number generator
         uint64_t seed = std::chrono::system_clock::now().time_since_epoch().count();
         std::cout << "seed = " << seed << std::endl;
         std::uniform_int_distribution<ValType> v_dist(std::numeric_limits<ValType>::min(), std::numeric_limits<ValType>::max());
