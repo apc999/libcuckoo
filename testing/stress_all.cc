@@ -30,14 +30,27 @@ typedef uint32_t ValType;
 typedef std::pair<KeyType, ValType> KVPair;
 
 // The number of keys that can be inserted, deleted, and searched on
-const size_t numkeys = 1000000;
+const size_t numkeys = 10000000;
+// The power argument passed to the hashtable constructor. By default
+// it should be enough to hold numkeys elements. This can be set with
+// the command line flag --power
+size_t power =  22;
 
-// The power argument passed to the hashtable constructor. This can be
-// set with the command line flag --power
-size_t power =  19;
 // The number of threads spawned for each type of operation. This can
 // be set with the command line flag --thread-num
 size_t thread_num = 4;
+// Whether to disable inserts or not. This can be set with the command
+// line flag --disable-inserts
+bool disable_inserts = false;
+// Whether to disable deletes or not. This can be set with the command
+// line flag --disable-deletes
+bool disable_deletes = false;
+// Whether to disable finds or not. This can be set with the command
+// line flag --disable-finds
+bool disable_finds = false;
+// How many seconds to run the test for. This can be set with the
+// command line flag --time
+size_t test_len = 10;
 
 // When set to true, it signals to the threads to stop running
 std::atomic<bool> finished = ATOMIC_VAR_INIT(false);
@@ -58,7 +71,8 @@ std::atomic<size_t> num_finds = ATOMIC_VAR_INIT(0);
 class AllEnvironment : public ::testing::Environment {
 public:
     AllEnvironment(size_t power = 1)
-        : table(power), val_dist(std::numeric_limits<ValType>::min(), std::numeric_limits<ValType>::max()),
+        : table(power), keys(numkeys), vals(numkeys), flags(numkeys),
+          val_dist(std::numeric_limits<ValType>::min(), std::numeric_limits<ValType>::max()),
           ind_dist(0, numkeys-1)
         {}
 
@@ -77,9 +91,9 @@ public:
     }
 
     cuckoohash_map<KeyType, ValType> table;
-    std::array<KeyType, numkeys> keys;
-    std::array<ValType, numkeys> vals;
-    std::array<std::atomic<slot_flags_t>, numkeys> flags;
+    std::vector<KeyType> keys;
+    std::vector<ValType> vals;
+    std::vector<std::atomic<slot_flags_t> > flags;
     std::uniform_int_distribution<ValType> val_dist;
     std::uniform_int_distribution<size_t> ind_dist;
     size_t gen_seed;
@@ -102,14 +116,20 @@ void insert_thread() {
             // marked it as in_use and run the insert
             KeyType k = ind;
             ValType v = env->val_dist(gen);
-            EXPECT_TRUE(env->table.insert(k, v));
-            ValType find_v;
-            EXPECT_TRUE(env->table.find(k, find_v));
-            EXPECT_EQ(v, find_v);
-            // Store v in the array and set in_use to false and in_table to true
-            env->vals[ind] = v;
-            env->flags[ind].store(slot_flags_t{false, true});
-            num_inserts.fetch_add(1, std::memory_order_relaxed);
+            bool res = env->table.insert(k, v);
+            EXPECT_TRUE(res);
+            if (res) {
+                ValType find_v;
+                EXPECT_TRUE(env->table.find(k, find_v));
+                EXPECT_EQ(v, find_v);
+                // Store v in the array and set in_use to false and in_table to true
+                env->vals[ind] = v;
+                env->flags[ind].store(slot_flags_t{false, true});
+                num_inserts.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                // Set in_use to false, but leave in_table as false
+                env->flags[ind].store(slot_flags_t{false, false});
+            }
         }
     }
 }
@@ -127,12 +147,18 @@ void delete_thread() {
             // The slot was not in use and in the table, so we marked
             // it as in_use and run the insert
             KeyType k = ind;
-            EXPECT_TRUE(env->table.erase(k));
-            ValType find_v;
-            EXPECT_FALSE(env->table.find(k, find_v));
-            // Sets in_use to false and in_table to false
-            env->flags[ind].store(slot_flags_t{false, false});
-            num_deletes.fetch_add(1, std::memory_order_relaxed);
+            bool res = env->table.erase(k);
+            EXPECT_TRUE(res);
+            if (res) {
+                ValType find_v;
+                EXPECT_FALSE(env->table.find(k, find_v));
+                // Sets in_use to false and in_table to false
+                env->flags[ind].store(slot_flags_t{false, false});
+                num_deletes.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                // Sets in_use to false but keeps in_table as true
+                env->flags[ind].store(slot_flags_t{false, true});
+            }
         }
     }
 }
@@ -167,12 +193,18 @@ void find_thread() {
 TEST(AllTest, Everything) {
     std::vector<std::thread> threads;
     for (size_t i = 0; i < thread_num; i++) {
-        threads.emplace_back(insert_thread);
-        threads.emplace_back(delete_thread);
-        threads.emplace_back(find_thread);
+        if (!disable_inserts) {
+            threads.emplace_back(insert_thread);
+        }
+        if (!disable_deletes) {
+            threads.emplace_back(delete_thread);
+        }
+        if (!disable_finds) {
+            threads.emplace_back(find_thread);
+        }
     }
     // Sleeps before ending the threads
-    std::this_thread::sleep_for(std::chrono::milliseconds(10L * 1000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(test_len * 1000));
     finished.store(true);
     for (size_t i = 0; i < threads.size(); i++) {
         threads[i].join();
@@ -194,37 +226,53 @@ TEST(AllTest, Everything) {
 }
 
 int main(int argc, char** argv) {
-    // Checks for the --power and --thread-num arguments, which are
-    // parsed similarly, since they both require a positive integer
-    // argument afterwards
-    const size_t possible_args_num = 2;
-    std::array<const char*, possible_args_num> possible_args = {"--power", "--thread-num"};
-    std::array<size_t*, possible_args_num> default_vals = {&power, &thread_num};
-    std::array<const char*, possible_args_num> help_strs = {"The power argument given to the hashtable during initialization",
-                                                            "The number of threads to spawn for each type of operation"};
+    // Checks for the --power, --thread-num, and --time arguments,
+    // which are parsed similarly, since they both require a positive
+    // integer argument afterwards
+    const size_t arg_num = 3;
+    std::array<const char*, arg_num> args = {"--power", "--thread-num", "--time"};
+    std::array<size_t*, arg_num> arg_vars = {&power, &thread_num, &test_len};
+    std::array<const char*, arg_num> arg_help = {"The power argument given to the hashtable during initialization",
+                                                 "The number of threads to spawn for each type of operation",
+                                                 "The number of seconds to run the test for"};
+    const size_t flag_num = 3;
+    std::array<const char*, flag_num> flags = {"--disable-inserts", "--disable-deletes", "--disable-finds"};
+    std::array<bool*, flag_num> flag_vars = {&disable_inserts, &disable_deletes, &disable_finds};
+    std::array<const char*, flag_num> flag_help = {"If set, no inserts will be run",
+                                                   "If set, no deletes will be run",
+                                                   "If set, no finds will be run"};
     for (int i = 0; i < argc; i++) {
-        for (size_t j = 0; j < possible_args_num; j++) {
-            if (strcmp(argv[i], possible_args[j]) == 0) {
+        for (size_t j = 0; j < arg_num; j++) {
+            if (strcmp(argv[i], args[j]) == 0) {
                 if (i == argc-1) {
-                    std::cerr << "You must provide a positive integer argument after the " << possible_args[j] << " argument" << std::endl;
+                    std::cerr << "You must provide a positive integer argument after the " << args[j] << " argument" << std::endl;
                     exit(1);
                 } else {
                     int argval = atoi(argv[i+1]);
                     if (argval <= 0) {
-                        std::cerr << "The argument to " << possible_args[j] << " must be a positive integer" << std::endl;
+                        std::cerr << "The argument to " << args[j] << " must be a positive integer" << std::endl;
                         exit(1);
                     } else {
-                        *(default_vals[j]) = argval;
+                        *(arg_vars[j]) = argval;
                     }
                 }
-            } else if (strcmp(argv[i], "--help") == 0) {
-                std::cerr << "Runs a stress test on inserts, deletes, and finds" << std::endl;
-                std::cerr << "Arguments:" << std::endl;
-                for (size_t k = 0; k < possible_args_num; k++) {
-                    std::cerr << possible_args[k] << ":\t\t" << help_strs[k] << std::endl;
-                }
-                exit(0);
             }
+        }
+        for (size_t j = 0; j < flag_num; j++) {
+            if (strcmp(argv[i], flags[j]) == 0) {
+                *(flag_vars[j]) = true;
+            }
+        }
+        if (strcmp(argv[i], "--help") == 0) {
+            std::cerr << "Runs a stress test on inserts, deletes, and finds" << std::endl;
+            std::cerr << "Arguments:" << std::endl;
+            for (size_t j = 0; j < arg_num; j++) {
+                std::cerr << args[j] << " (:\t\t" << arg_help[j] << std::endl;
+            }
+            for (size_t j = 0; j < flag_num; j++) {
+                std::cerr << flags[j] << ":\t" << flag_help[j] << std::endl;
+            }
+            exit(0);
         }
     }
 

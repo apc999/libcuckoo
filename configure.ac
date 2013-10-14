@@ -9,13 +9,13 @@ AC_CONFIG_HEADERS([config.h])
 
 AC_CONFIG_MACRO_DIR([m4])
 
-#CFLAGS="-g -ggdb"
-#CXXFLAGS="-g -ggdb"
-#CPPFLAGS="-g -ggdb"
+dnl CFLAGS="-g -ggdb -gdwarf-2"
+dnl CXXFLAGS="-g -ggdb -gdwarf-2"
+dnl CPPFLAGS="-g -ggdb -gdwarf-2"
 
-CFLAGS="-g -O3 -DNDEBUG"
-CXXFLAGS="-g -O3 -DNDEBUG"
-CPPFLAGS="-g -O3 -DNDEBUG"
+CFLAGS="-O3 -DNDEBUG"
+CXXFLAGS="-O3 -DNDEBUG"
+CPPFLAGS="-O3 -DNDEBUG"
 
 # Checks for programs.
 AC_PROG_CXX

@@ -25,6 +25,8 @@
 
 #include <string>
 #include <sstream>
+#include <utility>
+#include <stdexcept>
 
 #include "cuckoohash_map.hh"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
@@ -37,26 +39,24 @@ int main(int argc, char** argv)
 
 
     cuckoohash_map<std::string, double> table(power);
-    cuckoohash_map<std::string, double>::iterator it;
+    std::pair<std::string, double> res;
 
 
     for (size_t i = 1; i < numkeys; i++) {
         std::stringstream ss;
         ss << "key-" << i;
         std::string key = ss.str();
-        double   val = (double) 0.5 * i  - 1;
-
-        bool done = table.insert(key, val);
-         if (!done) {
-             printf("inserting key %zu to table fails \n", i);
-             break;
-         }
-        it = table.find(key);
-        if (it == table.end()) {
-            assert(false);
-        } else {
-            //std::cout << it->first << " " << it->second << std::endl;
+        bool done = table.insert(key, (double) 0.5 * i  - 1);
+        if (!done) {
+            printf("inserting key %zu to table fails \n", i);
+            break;
         }
+        try {
+            res = table.find(key);
+        } catch (const std::out_of_range& e) {
+            assert(false);
+        }
+        //std::cout << it->first << " " << it->second << std::endl;
     }
 
     table.report();

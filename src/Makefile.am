@@ -1,4 +1,4 @@
-noinst_PROGRAMS = test_cuckoo test_cuckoo_mt test_iterator bench_cuckoo app_cuckoo
+noinst_PROGRAMS = test_cuckoo test_cuckoo_mt bench_cuckoo app_cuckoo
 
 test_cuckoo_SOURCES = test_cuckoo.cc
 test_cuckoo_LDFLAGS = -L../lib -L$(top_srcdir)/lib -lcuckoo
@@ -7,10 +7,6 @@ test_cuckoo_DEPENDENCIES = $(top_srcdir)/lib/libcuckoo.la
 test_cuckoo_mt_SOURCES = test_cuckoo_mt.cc
 test_cuckoo_mt_LDFLAGS = -L../lib -L$(top_srcdir)/lib -lcuckoo
 test_cuckoo_mt_DEPENDENCIES = $(top_srcdir)/lib/libcuckoo.la
-
-test_iterator_SOURCES = test_iterator.cc
-test_iterator_LDFLAGS = -L../lib -L$(top_srcdir)/lib -lcuckoo
-test_iterator_DEPENDENCIES = $(top_srcdir)/lib/libcuckoo.la
 
 bench_cuckoo_SOURCES = bench_cuckoo.cc
 bench_cuckoo_LDFLAGS = -L../lib -L$(top_srcdir)/lib -lcuckoo
