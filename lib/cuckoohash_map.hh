@@ -57,7 +57,7 @@ public:
         pthread_mutex_destroy(&lock_);
         TableInfo* ti = table_info.load();
         if (ti != nullptr) {
-            delete table_info.load();
+            delete ti;
         }
     }
 
@@ -102,13 +102,15 @@ public:
     bool find(const key_type& key, mapped_type& val) {
         if (size() == 0) return false;
 
+    TryRead:
+
         const TableInfo* ti = table_info.load();
         uint32_t hv = hashed_key(key);
         size_t   i1 = index_hash(ti,hv);
         size_t   i2 = alt_index(ti, hv, i1);
 
         uint32_t vs1, vs2, ve1, ve2;
-    TryRead:
+
         start_read_counter2(ti, i1, i2, vs1, vs2);
 
         if (((vs1 & 1) || (vs2 & 1) )) {
@@ -262,6 +264,10 @@ private:
         std::unique_ptr<uint32_t[]> counters_;
     };
     std::atomic<TableInfo*> table_info;
+    // Holds a pointer to an old TableInfo that was replaced by a
+    // larger one upon expansion. This keeps the memory alive for any
+    // leftover find operations
+    TableInfo* old_table_info;
 
     /* Atomic operations on the version counters */
 
@@ -840,6 +846,7 @@ private:
    }
 
    cuckoo_status cuckoo_init(const size_t hashtable_init) {
+       old_table_info = nullptr;
        TableInfo* new_table_info(new TableInfo);
        try {
            new_table_info->hashpower_  = (hashtable_init > 0) ? hashtable_init : HASHPOWER_DEFAULT;
@@ -916,8 +923,16 @@ private:
        // goes out of scope
        TableInfo* old_ti = table_info.exchange(new_map.table_info.load());
        new_map.table_info.store(nullptr);
-       std::this_thread::sleep_for(std::chrono::milliseconds(100));
-       delete old_ti;
+       // Rather than deleting old_ti now, we store it in
+       // old_table_info. If there is already something in
+       // old_table_info, we delete that. There is still a slim chance
+       // that a find operation is using the already-stored pointer,
+       // if two expansions run in the middle of the TryRead loop in a
+       // find, but that scenario is unlikely to occur.
+       if (old_table_info != nullptr) {
+           delete old_table_info;
+       }
+       old_table_info = old_ti;
        return ok;
    }
 

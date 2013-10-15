@@ -20,6 +20,7 @@
 
 #include <cstring>
 #include <cstdlib>
+#include <cerrno>
 
 #include "cuckoohash_map.hh"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
@@ -51,18 +52,12 @@ bool disable_finds = false;
 // How many seconds to run the test for. This can be set with the
 // command line flag --time
 size_t test_len = 10;
+// The seed for the random number generator. If this isn't set to a
+// nonzero value with the --seed flag, the current time is used
+size_t seed = 0;
 
 // When set to true, it signals to the threads to stop running
 std::atomic<bool> finished = ATOMIC_VAR_INIT(false);
-
-// A bitfield containing flags for each slot in the array of key-value
-// pairs
-typedef struct {
-    // Whether the slot is in use
-    bool in_use : 4;
-    // Whether the key-value pair has been inserted into the table
-    bool in_table : 4;
-} slot_flags_t;
 
 std::atomic<size_t> num_inserts = ATOMIC_VAR_INIT(0);
 std::atomic<size_t> num_deletes = ATOMIC_VAR_INIT(0);
@@ -71,29 +66,33 @@ std::atomic<size_t> num_finds = ATOMIC_VAR_INIT(0);
 class AllEnvironment : public ::testing::Environment {
 public:
     AllEnvironment(size_t power = 1)
-        : table(power), keys(numkeys), vals(numkeys), flags(numkeys),
+        : table(power), keys(numkeys), vals(numkeys), in_table(numkeys), in_use(numkeys),
           val_dist(std::numeric_limits<ValType>::min(), std::numeric_limits<ValType>::max()),
           ind_dist(0, numkeys-1)
         {}
 
     virtual void SetUp() {
         // Sets up the random number generator
-        uint64_t seed = std::chrono::system_clock::now().time_since_epoch().count();
+        if (seed == 0) {
+            seed = std::chrono::system_clock::now().time_since_epoch().count();
+        }
         std::cout << "seed = " << seed << std::endl;
         gen_seed = seed;
 
-        // Fills in the keys and flags arrays. The vals array will
-        // be filled in by the insertion threads.
+        // Fills in all the vectors except vals, which will be filled
+        // in by the insertion threads.
         for (size_t i = 0; i < numkeys; i++) {
             keys[i] = i;
-            flags[i] = slot_flags_t{false, false};
+            in_table[i] = false;
+            in_use[i].store(false);
         }
     }
 
     cuckoohash_map<KeyType, ValType> table;
     std::vector<KeyType> keys;
     std::vector<ValType> vals;
-    std::vector<std::atomic<slot_flags_t> > flags;
+    std::vector<bool> in_table;
+    std::vector<std::atomic<bool> > in_use;
     std::uniform_int_distribution<ValType> val_dist;
     std::uniform_int_distribution<size_t> ind_dist;
     size_t gen_seed;
@@ -104,16 +103,19 @@ AllEnvironment* env;
 void insert_thread() {
     std::mt19937_64 gen(env->gen_seed);
     while (!finished.load()) {
-        // Picks a random number between 0 and numkeys. If that slot
-        // is not in use and not in the table, it locks the slot,
-        // inserts it into the table, checks that the insertion was
+        // Pick a random number between 0 and numkeys. If that slot is
+        // not in use, lock the slot. If the value is already in the
+        // table, set in_use to false and continue. Otherwise, insert
+        // a random value into the table, check that the insertion was
         // actually successful with another find operation, and then
         // store the value in the array and set in_table to true
         size_t ind = env->ind_dist(gen);
-        slot_flags_t flag_false_false = {false, false};
-        if (env->flags[ind].compare_exchange_strong(flag_false_false, slot_flags_t{true, false})) {
-            // The slot was not in use and not in the table, so we
-            // marked it as in_use and run the insert
+        bool expected = false;
+        if (env->in_use[ind].compare_exchange_strong(expected, true)) {
+            if (env->in_table[ind]) {
+                env->in_use[ind].store(false);
+                continue;
+            }
             KeyType k = ind;
             ValType v = env->val_dist(gen);
             bool res = env->table.insert(k, v);
@@ -122,14 +124,11 @@ void insert_thread() {
                 ValType find_v;
                 EXPECT_TRUE(env->table.find(k, find_v));
                 EXPECT_EQ(v, find_v);
-                // Store v in the array and set in_use to false and in_table to true
                 env->vals[ind] = v;
-                env->flags[ind].store(slot_flags_t{false, true});
+                env->in_table[ind] = true;
                 num_inserts.fetch_add(1, std::memory_order_relaxed);
-            } else {
-                // Set in_use to false, but leave in_table as false
-                env->flags[ind].store(slot_flags_t{false, false});
             }
+            env->in_use[ind].store(false);
         }
     }
 }
@@ -137,28 +136,28 @@ void insert_thread() {
 void delete_thread() {
     std::mt19937_64 gen(env->gen_seed);
     while (!finished.load()) {
-        // Picks a random number between 0 and numkeys. If that slot
-        // is not in use and is in the table, it locks the slot, runs
-        // a delete on that key, checks that the key is indeed not in
-        // the table anymore, and then sets in_table to false
+        // Pick a random number between 0 and numkeys and lock the
+        // slot. If that item is not in the table, unlock and
+        // continue. Otherwise run a delete on that key, check that
+        // the key is indeed not in the table anymore, and then set
+        // in_table to false
         size_t ind = env->ind_dist(gen);
-        slot_flags_t flag_false_true = {false, true};
-        if (env->flags[ind].compare_exchange_strong(flag_false_true, slot_flags_t{true, true})) {
-            // The slot was not in use and in the table, so we marked
-            // it as in_use and run the insert
+        bool expected = false;
+        if (env->in_use[ind].compare_exchange_strong(expected, true)) {
+            if (!env->in_table[ind]) {
+                env->in_use[ind].store(false);
+                continue;
+            }
             KeyType k = ind;
             bool res = env->table.erase(k);
             EXPECT_TRUE(res);
             if (res) {
                 ValType find_v;
                 EXPECT_FALSE(env->table.find(k, find_v));
-                // Sets in_use to false and in_table to false
-                env->flags[ind].store(slot_flags_t{false, false});
+                env->in_table[ind] = false;
                 num_deletes.fetch_add(1, std::memory_order_relaxed);
-            } else {
-                // Sets in_use to false but keeps in_table as true
-                env->flags[ind].store(slot_flags_t{false, true});
             }
+            env->in_use[ind].store(false);
         }
     }
 }
@@ -166,25 +165,22 @@ void delete_thread() {
 void find_thread() {
     std::mt19937_64 gen(env->gen_seed);
     while (!finished.load()) {
-        // Picks a random number between 0 and numkeys. If that slot
-        // is not in use, it locks the slot, runs a find on that key,
-        // and checks that the result is consistent with the in_table
-        // value of the flag
+        // Pick a random number between 0 and numkeys. If that slot is
+        // not in use, lock the slot. Run a find on that key, and
+        // checks that the result is consistent with the in_table
+        // value of the flag. Then it unlocks the slot.
         size_t ind = env->ind_dist(gen);
-        slot_flags_t ind_flag = env->flags[ind].load();
-        if (!ind_flag.in_use && env->flags[ind].compare_exchange_strong(ind_flag, slot_flags_t{true, ind_flag.in_table})) {
-            // We marked the slot as in_use, so now we can run the
-            // find
+        bool expected = false;
+        if (env->in_use[ind].compare_exchange_strong(expected, true)) {
             KeyType k = ind;
             ValType v;
             bool res = env->table.find(k, v);
-            EXPECT_EQ(ind_flag.in_table, res);
+            EXPECT_EQ(env->in_table[ind], res);
             if (res) {
                 EXPECT_EQ(v, env->vals[ind]);
             }
-            // Sets in_use to false
-            env->flags[ind].store(slot_flags_t{false, ind_flag.in_table});
             num_finds.fetch_add(1, std::memory_order_relaxed);
+            env->in_use[ind].store(false);
         }
     }
 }
@@ -212,7 +208,7 @@ TEST(AllTest, Everything) {
     // Finds the number of slots that are filled
     size_t numfilled = 0;
     for (size_t i = 0; i < numkeys; i++) {
-        if (env->flags[i].load().in_table) {
+        if (env->in_table[i]) {
             numfilled++;
         }
     }
@@ -229,12 +225,14 @@ int main(int argc, char** argv) {
     // Checks for the --power, --thread-num, and --time arguments,
     // which are parsed similarly, since they both require a positive
     // integer argument afterwards
-    const size_t arg_num = 3;
-    std::array<const char*, arg_num> args = {"--power", "--thread-num", "--time"};
-    std::array<size_t*, arg_num> arg_vars = {&power, &thread_num, &test_len};
+    errno = 0;
+    const size_t arg_num = 4;
+    std::array<const char*, arg_num> args = {"--power", "--thread-num", "--time", "--seed"};
+    std::array<size_t*, arg_num> arg_vars = {&power, &thread_num, &test_len, &seed};
     std::array<const char*, arg_num> arg_help = {"The power argument given to the hashtable during initialization",
                                                  "The number of threads to spawn for each type of operation",
-                                                 "The number of seconds to run the test for"};
+                                                 "The number of seconds to run the test for",
+                                                 "The seed for the random number generator"};
     const size_t flag_num = 3;
     std::array<const char*, flag_num> flags = {"--disable-inserts", "--disable-deletes", "--disable-finds"};
     std::array<bool*, flag_num> flag_vars = {&disable_inserts, &disable_deletes, &disable_finds};
@@ -248,9 +246,9 @@ int main(int argc, char** argv) {
                     std::cerr << "You must provide a positive integer argument after the " << args[j] << " argument" << std::endl;
                     exit(1);
                 } else {
-                    int argval = atoi(argv[i+1]);
-                    if (argval <= 0) {
-                        std::cerr << "The argument to " << args[j] << " must be a positive integer" << std::endl;
+                    size_t argval = strtoull(argv[i+1], NULL, 10);
+                    if (errno != 0) {
+                        std::cerr << "The argument to " << args[j] << " must be a valid size_t" << std::endl;
                         exit(1);
                     } else {
                         *(arg_vars[j]) = argval;
@@ -267,7 +265,7 @@ int main(int argc, char** argv) {
             std::cerr << "Runs a stress test on inserts, deletes, and finds" << std::endl;
             std::cerr << "Arguments:" << std::endl;
             for (size_t j = 0; j < arg_num; j++) {
-                std::cerr << args[j] << " (:\t\t" << arg_help[j] << std::endl;
+                std::cerr << args[j] << ":\t" << arg_help[j] << std::endl;
             }
             for (size_t j = 0; j < flag_num; j++) {
                 std::cerr << flags[j] << ":\t" << flag_help[j] << std::endl;
