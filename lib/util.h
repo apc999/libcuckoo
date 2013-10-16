@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <pthread.h>
+#include <pthread.h>
 
 #include "cuckoohash_config.h" // for DEBUG
 
@@ -83,7 +84,7 @@ void set_bit(char* p, size_t k, bool v) {
 
 
 #if DEBUG
-#  define DBG(fmt, args...)  fprintf(stderr, ANSI_COLOR_GREEN"[libcuckoo:%s:%d] " fmt"" ANSI_COLOR_RESET,__FILE__,__LINE__,args)
+#  define DBG(fmt, args...)  fprintf(stderr, ANSI_COLOR_GREEN"[libcuckoo:%s:%d:%zu] " fmt"" ANSI_COLOR_RESET,__FILE__,__LINE__,pthread_self(), args)
 #else
 #  define DBG(fmt, args...)  do {} while (0)
 #endif

@@ -31,11 +31,11 @@ typedef uint32_t ValType;
 typedef std::pair<KeyType, ValType> KVPair;
 
 // The number of keys that can be inserted, deleted, and searched on
-const size_t numkeys = 10000000;
+const size_t numkeys = 100000000L;
 // The power argument passed to the hashtable constructor. By default
 // it should be enough to hold numkeys elements. This can be set with
 // the command line flag --power
-size_t power =  22;
+size_t power =  24;
 
 // The number of threads spawned for each type of operation. This can
 // be set with the command line flag --thread-num
@@ -66,7 +66,7 @@ std::atomic<size_t> num_finds = ATOMIC_VAR_INIT(0);
 class AllEnvironment : public ::testing::Environment {
 public:
     AllEnvironment(size_t power = 1)
-        : table(power), keys(numkeys), vals(numkeys), in_table(numkeys), in_use(numkeys),
+        : table(power), keys(numkeys), vals(numkeys), in_table(new bool[numkeys]), in_use(numkeys),
           val_dist(std::numeric_limits<ValType>::min(), std::numeric_limits<ValType>::max()),
           ind_dist(0, numkeys-1)
         {}
@@ -84,15 +84,15 @@ public:
         for (size_t i = 0; i < numkeys; i++) {
             keys[i] = i;
             in_table[i] = false;
-            in_use[i].store(false);
+            in_use[i].clear();
         }
     }
 
     cuckoohash_map<KeyType, ValType> table;
     std::vector<KeyType> keys;
     std::vector<ValType> vals;
-    std::vector<bool> in_table;
-    std::vector<std::atomic<bool> > in_use;
+    std::unique_ptr<bool[]> in_table;
+    std::vector<std::atomic_flag> in_use;
     std::uniform_int_distribution<ValType> val_dist;
     std::uniform_int_distribution<size_t> ind_dist;
     size_t gen_seed;
@@ -105,30 +105,28 @@ void insert_thread() {
     while (!finished.load()) {
         // Pick a random number between 0 and numkeys. If that slot is
         // not in use, lock the slot. If the value is already in the
-        // table, set in_use to false and continue. Otherwise, insert
-        // a random value into the table, check that the insertion was
+        // table, clear in_use and continue. Otherwise, insert a
+        // random value into the table, check that the insertion was
         // actually successful with another find operation, and then
-        // store the value in the array and set in_table to true
+        // store the value in the array and set in_table to true and
+        // clear in_use
         size_t ind = env->ind_dist(gen);
-        bool expected = false;
-        if (env->in_use[ind].compare_exchange_strong(expected, true)) {
-            if (env->in_table[ind]) {
-                env->in_use[ind].store(false);
-                continue;
+        if (!env->in_use[ind].test_and_set()) {
+            if (env->in_table[ind] == false) {
+                KeyType k = ind;
+                ValType v = env->val_dist(gen);
+                bool res = env->table.insert(k, v);
+                EXPECT_TRUE(res);
+                if (res) {
+                    ValType find_v;
+                    EXPECT_TRUE(env->table.find(k, find_v));
+                    EXPECT_EQ(v, find_v);
+                    env->vals[ind] = v;
+                    env->in_table[ind] = true;
+                    num_inserts.fetch_add(1, std::memory_order_relaxed);
+                }
             }
-            KeyType k = ind;
-            ValType v = env->val_dist(gen);
-            bool res = env->table.insert(k, v);
-            EXPECT_TRUE(res);
-            if (res) {
-                ValType find_v;
-                EXPECT_TRUE(env->table.find(k, find_v));
-                EXPECT_EQ(v, find_v);
-                env->vals[ind] = v;
-                env->in_table[ind] = true;
-                num_inserts.fetch_add(1, std::memory_order_relaxed);
-            }
-            env->in_use[ind].store(false);
+            env->in_use[ind].clear();
         }
     }
 }
@@ -136,28 +134,24 @@ void insert_thread() {
 void delete_thread() {
     std::mt19937_64 gen(env->gen_seed);
     while (!finished.load()) {
-        // Pick a random number between 0 and numkeys and lock the
-        // slot. If that item is not in the table, unlock and
-        // continue. Otherwise run a delete on that key, check that
-        // the key is indeed not in the table anymore, and then set
-        // in_table to false
+        // Run a delete on a random key that is in the table, check
+        // that the key is indeed not in the table anymore, and then
+        // set in_table to false
         size_t ind = env->ind_dist(gen);
-        bool expected = false;
-        if (env->in_use[ind].compare_exchange_strong(expected, true)) {
-            if (!env->in_table[ind]) {
-                env->in_use[ind].store(false);
-                continue;
+        if (!env->in_use[ind].test_and_set()) {
+            if (env->in_table[ind] == true) {
+                KeyType k = ind;
+                bool res = env->table.erase(k);
+                EXPECT_TRUE(res);
+                if (res) {
+                    ValType find_v;
+                    res = env->table.find(k, find_v);
+                    EXPECT_FALSE(res);
+                    env->in_table[ind] = false;
+                    num_deletes.fetch_add(1, std::memory_order_relaxed);
+                }
             }
-            KeyType k = ind;
-            bool res = env->table.erase(k);
-            EXPECT_TRUE(res);
-            if (res) {
-                ValType find_v;
-                EXPECT_FALSE(env->table.find(k, find_v));
-                env->in_table[ind] = false;
-                num_deletes.fetch_add(1, std::memory_order_relaxed);
-            }
-            env->in_use[ind].store(false);
+            env->in_use[ind].clear();
         }
     }
 }
@@ -165,13 +159,11 @@ void delete_thread() {
 void find_thread() {
     std::mt19937_64 gen(env->gen_seed);
     while (!finished.load()) {
-        // Pick a random number between 0 and numkeys. If that slot is
-        // not in use, lock the slot. Run a find on that key, and
-        // checks that the result is consistent with the in_table
-        // value of the flag. Then it unlocks the slot.
+        // Run a find on a random key and check that the presence of
+        // the key matches in_table
         size_t ind = env->ind_dist(gen);
         bool expected = false;
-        if (env->in_use[ind].compare_exchange_strong(expected, true)) {
+        if (!env->in_use[ind].test_and_set()) {
             KeyType k = ind;
             ValType v;
             bool res = env->table.find(k, v);
@@ -180,7 +172,7 @@ void find_thread() {
                 EXPECT_EQ(v, env->vals[ind]);
             }
             num_finds.fetch_add(1, std::memory_order_relaxed);
-            env->in_use[ind].store(false);
+            env->in_use[ind].clear();
         }
     }
 }

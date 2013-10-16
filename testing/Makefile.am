@@ -1,6 +1,6 @@
 GTEST_DIR = $(top_srcdir)/gtest
 testLDFLAGS = -lpthread libgtest_main.a -L$(top_srcdir)/lib -lcuckoo
-testDEPS = $(top_srcdir)/lib/libcuckoo.la
+testDEPS = $(top_srcdir)/lib/libcuckoo.la libgtest.a libgtest_main.a
 
 noinst_LIBRARIES = libgtest.a libgtest_main.a
 libgtest_a_SOURCES = $(GTEST_DIR)/src/gtest-all.cc
