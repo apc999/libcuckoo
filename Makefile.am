@@ -1,4 +1,4 @@
-SUBDIRS = lib src testing
+SUBDIRS = lib src
 CLEANFILES = core *.core *~
 DISTCLEANFILES = autom4te*.cache config.status config.log
 MAINTAINERCLEANFILES = aclocal.m4 install-sh mkinstalldirs \
