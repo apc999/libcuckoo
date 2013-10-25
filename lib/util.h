@@ -1,6 +1,9 @@
 #ifndef UTIL_H
 #define UTIL_H
 
+#include <stdint.h>
+#include <pthread.h>
+
 #include "cuckoohash_config.h" // for DEBUG
 
 #define mutex_lock(mutex) while (pthread_mutex_trylock(mutex)) {};

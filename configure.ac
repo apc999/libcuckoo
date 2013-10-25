@@ -9,15 +9,15 @@ AC_CONFIG_HEADERS([config.h])
 
 AC_CONFIG_MACRO_DIR([m4])
 
-#CFLAGS="-g -ggdb"
-#CXXFLAGS="-g -ggdb"
-#CPPFLAGS="-g -ggdb"
+dnl CFLAGS="-g -ggdb -gdwarf-2"
+dnl CXXFLAGS="-g -ggdb -gdwarf-2"
+dnl CPPFLAGS="-g -ggdb -gdwarf-2"
 
-CFLAGS="-g -O3 -DNDEBUG"
-CXXFLAGS="-g -O3 -DNDEBUG"
-CPPFLAGS="-g -O3 -DNDEBUG"
+CFLAGS="-O3 -DNDEBUG"
+CXXFLAGS="-O3 -DNDEBUG"
+CPPFLAGS="-O3 -DNDEBUG"
 
-# Checks for programs. 
+# Checks for programs.
 AC_PROG_CXX
 AC_PROG_CC
 
@@ -52,13 +52,13 @@ AC_DEFUN([AC_C_ENDIAN],
     [AC_LANG_PROGRAM([], [dnl
         long val = 1;
         char *c = (char *) &val;
-        exit(*c == 1); 
-    ])  
-  ],[ 
+        exit(*c == 1);
+    ])
+  ],[
     ac_cv_c_endian=big
-  ],[ 
+  ],[
     ac_cv_c_endian=little
-  ])  
+  ])
 ])
 if test $ac_cv_c_endian = big; then
   AC_DEFINE(ENDIAN_BIG, 1, [machine is bigendian])
@@ -71,7 +71,7 @@ fi
 AC_C_ENDIAN
 
 
-dnl Check if we have stdbool 
+dnl Check if we have stdbool
 
 #AC_HEADER_STDBOOL
 AH_BOTTOM([#if HAVE_STDBOOL_H
@@ -86,6 +86,7 @@ AH_BOTTOM([#if HAVE_STDBOOL_H
 AC_CONFIG_FILES([ Makefile
                   src/Makefile
                   lib/Makefile
-		])  
+                  testing/Makefile
+                ])
 
 AC_OUTPUT

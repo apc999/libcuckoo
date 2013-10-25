@@ -18,6 +18,7 @@ src/test_cuckoo
 src/bench_cuckoo
 src/test_cuckoo_mt
 src/app_cuckoo
+src/test_iterator
 stamp-h1
 config.guess
 config.h.in~
@@ -31,3 +32,7 @@ ltmain.sh
 m4/*
 */*.o
 perf*
+testing/*.a
+testing/.deps
+testing/.libs
+testing/*.out
