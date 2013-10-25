@@ -18,10 +18,7 @@
 #include <atomic>
 #include <thread>
 
-#include <cstring>
-#include <cstdlib>
-#include <cerrno>
-
+#include "commandline_parser.cc"
 #include "cuckoohash_map.hh"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
 #include "gtest/gtest.h"
@@ -65,7 +62,7 @@ std::atomic<size_t> num_finds = ATOMIC_VAR_INIT(0);
 
 class AllEnvironment : public ::testing::Environment {
 public:
-    AllEnvironment(size_t power = 1)
+    AllEnvironment()
         : table(power), keys(numkeys), vals(numkeys), in_table(new bool[numkeys]), in_use(numkeys),
           val_dist(std::numeric_limits<ValType>::min(), std::numeric_limits<ValType>::max()),
           ind_dist(0, numkeys-1)
@@ -214,59 +211,20 @@ TEST(AllTest, Everything) {
 }
 
 int main(int argc, char** argv) {
-    // Checks for the --power, --thread-num, and --time arguments,
-    // which are parsed similarly, since they both require a positive
-    // integer argument afterwards
-    errno = 0;
-    const size_t arg_num = 4;
-    std::array<const char*, arg_num> args = {"--power", "--thread-num", "--time", "--seed"};
-    std::array<size_t*, arg_num> arg_vars = {&power, &thread_num, &test_len, &seed};
-    std::array<const char*, arg_num> arg_help = {"The power argument given to the hashtable during initialization",
-                                                 "The number of threads to spawn for each type of operation",
-                                                 "The number of seconds to run the test for",
-                                                 "The seed for the random number generator"};
-    const size_t flag_num = 3;
-    std::array<const char*, flag_num> flags = {"--disable-inserts", "--disable-deletes", "--disable-finds"};
-    std::array<bool*, flag_num> flag_vars = {&disable_inserts, &disable_deletes, &disable_finds};
-    std::array<const char*, flag_num> flag_help = {"If set, no inserts will be run",
-                                                   "If set, no deletes will be run",
-                                                   "If set, no finds will be run"};
-    for (int i = 0; i < argc; i++) {
-        for (size_t j = 0; j < arg_num; j++) {
-            if (strcmp(argv[i], args[j]) == 0) {
-                if (i == argc-1) {
-                    std::cerr << "You must provide a positive integer argument after the " << args[j] << " argument" << std::endl;
-                    exit(1);
-                } else {
-                    size_t argval = strtoull(argv[i+1], NULL, 10);
-                    if (errno != 0) {
-                        std::cerr << "The argument to " << args[j] << " must be a valid size_t" << std::endl;
-                        exit(1);
-                    } else {
-                        *(arg_vars[j]) = argval;
-                    }
-                }
-            }
-        }
-        for (size_t j = 0; j < flag_num; j++) {
-            if (strcmp(argv[i], flags[j]) == 0) {
-                *(flag_vars[j]) = true;
-            }
-        }
-        if (strcmp(argv[i], "--help") == 0) {
-            std::cerr << "Runs a stress test on inserts, deletes, and finds" << std::endl;
-            std::cerr << "Arguments:" << std::endl;
-            for (size_t j = 0; j < arg_num; j++) {
-                std::cerr << args[j] << ":\t" << arg_help[j] << std::endl;
-            }
-            for (size_t j = 0; j < flag_num; j++) {
-                std::cerr << flags[j] << ":\t" << flag_help[j] << std::endl;
-            }
-            exit(0);
-        }
-    }
+    const char* args[] = {"--power", "--thread-num", "--time", "--seed"};
+    size_t* arg_vars[] = {&power, &thread_num, &test_len, &seed};
+    const char* arg_help[] = {"The power argument given to the hashtable during initialization",
+                              "The number of threads to spawn for each type of operation",
+                              "The number of seconds to run the test for",
+                              "The seed for the random number generator"};
+    const char* flags[] = {"--disable-inserts", "--disable-deletes", "--disable-finds"};
+    bool* flag_vars[] = {&disable_inserts, &disable_deletes, &disable_finds};
+    const char* flag_help[] = {"If set, no inserts will be run",
+                               "If set, no deletes will be run",
+                               "If set, no finds will be run"};
+    parse_flags(argc, argv, args, arg_vars, arg_help, 4, flags, flag_vars, flag_help, 3);
 
-    env = (AllEnvironment*) ::testing::AddGlobalTestEnvironment(new AllEnvironment(power));
+    env = (AllEnvironment*) ::testing::AddGlobalTestEnvironment(new AllEnvironment);
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

@@ -84,6 +84,10 @@ public:
         return (table_info.load()->hashitems_.load() == 0);
     }
 
+    size_type hashpower() const {
+        return table_info.load()->hashpower_;
+    }
+
     size_type bucket_count() const {
         return hashsize(table_info.load()->hashpower_);
     }
@@ -426,10 +430,16 @@ private:
             for (size_t idx = 0; idx < NUM_CUCKOO_PATH; idx++) {
                 size_t i, j;
                 i = curr->buckets[idx];
+                // We lock the bucket here so that values in the
+                // bucket don't change during the loop.
+                // cuckoopath_move will check that the values in the
+                // buckets are the same as the ones stored here
+                lock(ti, i);
                 for (j = 0; j < SLOT_PER_BUCKET; j++) {
                     if (is_slot_empty(ti, i, j)) {
                         curr->slots[idx] = j;
                         cp_index   = idx;
+                        unlock(ti, i);
                         return depth;
                     }
                 }
@@ -437,18 +447,13 @@ private:
                 /* pick the victim as the j-th item */
                 j = (cheap_rand() >> 20) % SLOT_PER_BUCKET;
 
-                // Since we aren't taking any locks here, the values
-                // in ti can change in the middle of the computation.
-                // Therefore, we only read once, and during the
-                // cuckoopath_move operation, we check that the key we
-                // stored here is the same as what is in the bucket
-                // then
                 key_type k = ti->buckets_[i].keys[j];
                 uint32_t hv        = hashed_key(k);
                 curr->slots[idx]   = j;
                 curr->keys[idx]    = k;
                 next->buckets[idx] = alt_index(ti, hv, i);
                 assert(next->buckets[idx] == index_hash(ti, hv) || next->buckets[idx] == alt_index(ti, hv, index_hash(ti, hv)));
+                unlock(ti, i);
             }
 
             num_kicks += NUM_CUCKOO_PATH;
