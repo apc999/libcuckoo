@@ -11,10 +11,11 @@
  */
 #define HASHPOWER_DEFAULT 16
 
-/*
- * the maximum number of cuckoo operations per insert,
- */
-#define MAX_CUCKOO_COUNT 500
+// The maximum number of cuckoo operations per insert,
+#define MAX_CUCKOO_COUNT 800
+
+// The maximum depth of a BFS path
+#define MAX_BFS_DEPTH 4
 
 /*
  * the number of cuckoo paths
@@ -29,6 +30,6 @@
 /* 
  * set DEBUG to 1 to enable debug output 
  */
-#define DEBUG 0
+#define DEBUG 1
 
 #endif
