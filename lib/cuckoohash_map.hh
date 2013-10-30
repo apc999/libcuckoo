@@ -10,7 +10,7 @@
 #include <thread>
 #include <chrono>
 #include <mutex>
-#include <list>
+#include <vector>
 
 #include "cuckoohash_config.h"
 #include "cuckoohash_util.h"
@@ -210,7 +210,7 @@ private:
     // Holds pointers to old TableInfos that were replaced by a larger
     // one upon expansion. This keeps the memory alive for any
     // leftover operations
-    std::list<TableInfo*> old_table_infos;
+    std::vector<TableInfo*> old_table_infos;
 
     /* Operations involving the locks_ array */
 
@@ -353,44 +353,26 @@ private:
     }
 
 
-    bool get_slot_flag(const TableInfo* ti, const size_t i, const size_t j) const {
+    static bool get_slot_flag(const TableInfo* ti, const size_t i, const size_t j) {
         assert(i < hashsize(ti->hashpower_));
         assert(j < SLOT_PER_BUCKET);
         return get_bit(&(ti->buckets_[i].flag), j);
     }
 
-    void set_slot_used(const TableInfo* ti, const size_t i, const size_t j) {
+    static void set_slot_used(const TableInfo* ti, const size_t i, const size_t j) {
         assert(i < hashsize(ti->hashpower_));
         assert(j < SLOT_PER_BUCKET);
         set_bit(&(ti->buckets_[i].flag), j, 1);
     }
 
-    void set_slot_empty(const TableInfo* ti, const size_t i, const size_t j) {
+    static void set_slot_empty(const TableInfo* ti, const size_t i, const size_t j) {
         assert(i < hashsize(ti->hashpower_));
         assert(j < SLOT_PER_BUCKET);
         set_bit(&(ti->buckets_[i].flag), j, 0);
     }
 
-    bool is_slot_empty(const TableInfo* ti, const size_t i,const size_t j) {
-        if (0 == get_slot_flag(ti, i, j)) {
-            return true;
-        }
-
-        // even it shows "non-empty", it could be a false alert during
-        // expansion
-        if (expanding_.load() && i >= cleaned_buckets_) {
-            // when we are expanding
-            // we could leave keys in their old but wrong buckets
-            uint32_t hv = hashed_key(ti->buckets_[i].keys[j]);
-            size_t   i1 = index_hash(ti, hv);
-            size_t   i2 = alt_index(ti, hv, i1);
-
-            if ((i != i1) && (i != i2)) {
-                set_slot_empty(ti, i, j);
-                return true;
-            }
-        }
-        return false;
+    static bool is_slot_empty(const TableInfo* ti, const size_t i,const size_t j) {
+        return (0 == get_slot_flag(ti, i, j));
     }
 
     // Holds the unpacked form of a cuckoo path item
@@ -1053,6 +1035,15 @@ private:
     * the address of the old one, but it actualy isn't, since we
     * always allocate the new table_info before deleting the old
     * pointer, which we actually store to be deleted later. */
+    static void insert_into_table(cuckoohash_map<Key, T, Hash>& new_map, const TableInfo* old_ti, size_t i, size_t end) {
+        for (;i < end; i++) {
+            for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
+                if (!is_slot_empty(old_ti, i, j)) {
+                    new_map.insert(old_ti->buckets_[i].keys[j], old_ti->buckets_[i].vals[j]);
+                }
+            }
+        }
+    }
     cuckoo_status cuckoo_expand_simple() {
         TableInfo* ti = snapshot_and_lock_all();
         if (ti == nullptr) {
@@ -1062,12 +1053,15 @@ private:
         // Creates a new hash table twice the size and adds all the
         // elements from the old buckets
         cuckoohash_map<Key, T, Hash> new_map(ti->hashpower_+1);
-        for (size_t i = 0; i < bucket_count(); i++) {
-            for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
-                if (!is_slot_empty(ti, i, j)) {
-                    new_map.insert(ti->buckets_[i].keys[j], ti->buckets_[i].vals[j]);
-                }
-            }
+        const size_t threadnum = std::thread::hardware_concurrency();
+        const size_t buckets_per_thread = hashsize(ti->hashpower_) / threadnum;
+        std::vector<std::thread> insertion_threads(threadnum);
+        for (size_t i = 0; i < threadnum-1; i++) {
+            insertion_threads[i] = std::thread(insert_into_table, std::ref(new_map), ti, i*buckets_per_thread, (i+1)*buckets_per_thread);
+        }
+        insertion_threads[threadnum-1] = std::thread(insert_into_table, std::ref(new_map), ti, (threadnum-1)*buckets_per_thread, bucket_count());
+        for (size_t i = 0; i < threadnum; i++) {
+            insertion_threads[i].join();
         }
 
         // Sets this table_info to new_map's. It then sets new_map's
@@ -1080,7 +1074,7 @@ private:
         // deleted when the hash table's destructor is called. This
         // probably wastes extra memory, but reference counting is too
         // expensive.
-        old_table_infos.emplace_back(ti);
+        old_table_infos.push_back(ti);
         unlock_all(ti);
         return ok;
     }

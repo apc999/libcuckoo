@@ -16,6 +16,7 @@
 #include <vector>
 #include <atomic>
 #include <thread>
+#include <unistd.h>
 
 #include "commandline_parser.cc"
 #include "cuckoohash_map.hh"
@@ -31,7 +32,7 @@ typedef std::pair<KeyType, ValType> KVPair;
 size_t power = 19;
 // The number of threads spawned for inserts. This can be set with the
 // command line flag --thread-num
-size_t thread_num = std::thread::hardware_concurrency();
+size_t thread_num = sysconf(_SC_NPROCESSORS_ONLN);
 // The load factor to fill the table up to before testing throughput.
 // This can be set with the command line flag --begin-load.
 size_t begin_load = 50;
@@ -43,22 +44,23 @@ size_t end_load = 75;
 // with the command line flag --seed
 size_t seed = 0;
 
+// Inserts the keys in the given range (with value 0), exiting if there is an expansion
+void insert_thread(cuckoohash_map<KeyType, ValType>& table, std::vector<KeyType>::iterator begin, std::vector<KeyType>::iterator end) {
+    for (;begin != end; begin++) {
+        if (table.hashpower() > power) {
+            std::cerr << "Expansion triggered" << std::endl;
+            exit(1);
+        }
+        ASSERT_TRUE(table.insert(*begin, 0));
+    }
+}
+
 class InsertEnvironment : public ::testing::Environment {
 public:
     // We allocate the vectors with the total amount of space in the
     // table, which is bucket_count() * SLOT_PER_BUCKET
     InsertEnvironment()
         : table(power), numkeys(table.bucket_count()*SLOT_PER_BUCKET), keys(numkeys) {}
-
-    void prefill_insert_thread(size_t begin_key, size_t end_key) {
-        for (size_t k = begin_key; k < end_key && table.load_factor()*100 < begin_load; k++) {
-            if (table.hashpower() > power) {
-                std::cerr << "Expansion triggered" << std::endl;
-                exit(1);
-            }
-            ASSERT_TRUE(table.insert(k, 0));
-        }
-    }
 
     virtual void SetUp() {
         // Sets up the random number generator
@@ -68,12 +70,23 @@ public:
         std::cout << "seed = " << seed << std::endl;
         gen.seed(seed);
 
-        // Until the load factor reaches begin_load, we insert keys in
-        // the range 0..numkeys. We just use 0 as the value
+        // We fill the keys array with integers between numkeys and
+        // 2*numkeys, shuffled randomly
+        keys[0] = numkeys;
+        for (size_t i = 1; i < numkeys; i++) {
+            const size_t swapind = gen() % i;
+            keys[i] = keys[swapind];
+            keys[swapind] = i+numkeys;
+        }
+
+        // We prefill the table to begin_load with as many threads as
+        // there are processors, giving each thread enough keys to
+        // insert
         std::vector<std::thread> threads;
-        size_t keys_per_thread = numkeys / std::thread::hardware_concurrency();
-        for (size_t i = 0; i < std::thread::hardware_concurrency(); i++) {
-            threads.emplace_back(&InsertEnvironment::prefill_insert_thread, this, i*keys_per_thread, (i+1)*keys_per_thread);
+        const size_t max_thread_num = sysconf(_SC_NPROCESSORS_ONLN);
+        size_t keys_per_thread = numkeys * (begin_load / 100.0) / max_thread_num;
+        for (size_t i = 0; i < max_thread_num; i++) {
+            threads.emplace_back(insert_thread, std::ref(table), keys.begin()+i*keys_per_thread, keys.begin()+(i+1)*keys_per_thread);
         }
         for (size_t i = 0; i < threads.size(); i++) {
             threads[i].join();
@@ -81,13 +94,6 @@ public:
 
         init_size = table.size();
 
-        // Since we prefill the array with keys between 0 and numkeys,
-        // we iniitialize keys with keys in the range
-        // numkeys..2*numkeys, and then we shuffle it
-        for (size_t i = 0; i < numkeys; i++) {
-            keys[i] = i+numkeys;
-        }
-        std::shuffle(keys.begin(), keys.end(), gen);
         std::cout << "Table with capacity " << numkeys << " prefilled to a load factor of " << table.load_factor() << std::endl;
     }
 
@@ -100,24 +106,12 @@ public:
 
 InsertEnvironment* env;
 
-// Inserts the keys in the given range in a random order, avoiding
-// inserting duplicates
-void insert_thread(std::vector<KeyType>::iterator begin, std::vector<KeyType>::iterator end) {
-    for (;begin != end && env->table.load_factor()*100 < end_load; begin++) {
-        if (env->table.hashpower() > power) {
-            std::cerr << "Expansion triggered" << std::endl;
-            exit(1);
-        }
-        ASSERT_TRUE(env->table.insert(*begin, 0));
-    }
-}
-
 TEST(InsertThroughputTest, Everything) {
     std::vector<std::thread> threads;
-    size_t keys_per_thread = env->numkeys / thread_num;
+    size_t keys_per_thread = env->numkeys * ((end_load-begin_load) / 100.0) / thread_num;
     auto t1 = std::chrono::high_resolution_clock::now();
     for (size_t i = 0; i < thread_num; i++) {
-        threads.emplace_back(insert_thread, env->keys.begin()+(i*keys_per_thread), env->keys.begin()+((i+1)*keys_per_thread));
+        threads.emplace_back(insert_thread, std::ref(env->table), env->keys.begin()+(i*keys_per_thread)+env->init_size, env->keys.begin()+((i+1)*keys_per_thread)+env->init_size);
     }
     for (size_t i = 0; i < threads.size(); i++) {
         threads[i].join();
