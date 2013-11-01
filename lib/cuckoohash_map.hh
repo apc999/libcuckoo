@@ -11,6 +11,7 @@
 #include <chrono>
 #include <mutex>
 #include <vector>
+#include <list>
 
 #include "cuckoohash_config.h"
 #include "cuckoohash_util.h"
@@ -30,6 +31,75 @@ typedef enum {
     failure_table_full = 6,
     failure_under_expansion = 7,
 } cuckoo_status;
+
+// This is a hazard pointer, used to indicate which version of the
+// TableInfo is currently being used in the thread. Since
+// cuckoohash_map operations can run simultaneously in different
+// threads, this variable is thread local. Note that this variable can
+// be safely shared between different cuckoohash_map instances, since
+// multiple operations cannot occur simultaneously in one thread. The
+// hazard pointer variable points to a pointer inside a global list of
+// pointers, that each map checks before deleting any old TableInfo
+// pointers.
+__thread void** _cuckoohash_hazard_pointer = nullptr;
+
+// Stores a list of pointers that cannot be deleted by an
+// expansion thread. Each thread gets its own node in the list,
+// whose data pointer it can modify without contention
+class GlobalHazardPointerList {
+    std::list<void*> hp_;
+    std::mutex lock_;
+public:
+    // Creates and returns a new hazard pointer for a thread
+    void** new_hazard_pointer() {
+        lock_.lock();
+        hp_.emplace_back(nullptr);
+        void** ret = &hp_.back();
+        lock_.unlock();
+        return ret;
+    }
+    // Scans the list of hazard pointers, deleting any pointers in
+    // old_pointers that aren't in this list. If it does delete a
+    // pointer in old_pointers, it deletes that node from the list
+    template <class T>
+    void delete_unused(std::list<T*>& old_pointers) {
+        lock_.lock();
+        auto it = old_pointers.begin();
+        while (it != old_pointers.end()) {
+            bool deleteable = true;
+            for (auto hpit = hp_.cbegin(); hpit != hp_.cend(); hpit++) {
+                if (*hpit == *it) {
+                    deleteable = false;
+                    break;
+                }
+            }
+            if (deleteable) {
+                DBG("deleting %p\n", *it);
+                delete *it;
+                it = old_pointers.erase(it);
+            } else {
+                it++;
+            }
+        }
+        lock_.unlock();
+    }
+};
+GlobalHazardPointerList global_hazard_pointers;
+
+// Should be called before any public method that loads a table
+// snapshot. It checks that the thread local hazard pointer
+// pointer is not null, and gets a new pointer if it is null.
+inline void check_hazard_pointer() {
+    if (_cuckoohash_hazard_pointer == nullptr) {
+        _cuckoohash_hazard_pointer = global_hazard_pointers.new_hazard_pointer();
+    }
+}
+// Once a function is finished with a version of the table, it
+// calls unset so that the pointer can be freed if it needs to
+inline void unset_hazard_pointer() {
+    *_cuckoohash_hazard_pointer = nullptr;
+}
+
 
 // Forward-declares the iterator types, since they are needed in the
 // map
@@ -61,7 +131,7 @@ public:
         if (ti != nullptr) {
             delete ti;
         }
-        for (auto it = old_table_infos.begin(); it != old_table_infos.end(); it++) {
+        for (auto it = old_table_infos.cbegin(); it != old_table_infos.cend(); it++) {
             delete *it;
         }
     }
@@ -111,8 +181,7 @@ public:
     // wants to check, so it contends with writes.
     bool find(const key_type& key, mapped_type& val) {
         if (size() == 0) return false;
-        cuckoo_status st = cuckoo_find(key, val);
-        return (st == ok);
+        return (cuckoo_find(key, val) == ok);
     }
 
     value_type find(const key_type& key) {
@@ -166,8 +235,7 @@ public:
 
     // Deletion routines
     bool erase(const key_type& key) {
-        cuckoo_status st = cuckoo_delete(key);
-        return (st == ok);
+        return (cuckoo_delete(key) == ok);
     }
 
     // None standard functions:
@@ -207,10 +275,12 @@ private:
         std::unique_ptr<std::mutex[]> locks_;
     };
     std::atomic<TableInfo*> table_info;
+
     // Holds pointers to old TableInfos that were replaced by a larger
     // one upon expansion. This keeps the memory alive for any
-    // leftover operations
-    std::vector<TableInfo*> old_table_infos;
+    // leftover operations, until they are deleted by the global
+    // hazard pointer manager.
+    std::list<TableInfo*> old_table_infos;
 
     /* Operations involving the locks_ array */
 
@@ -265,6 +335,12 @@ private:
     inline void snapshot_and_lock_two(const uint32_t hv, TableInfo*& ti, size_t& i1, size_t& i2) {
     TryAcquire:
         ti = table_info.load();
+        *_cuckoohash_hazard_pointer = static_cast<void*>(ti);
+        if (ti != table_info.load()) {
+            // We may not have set the hazard pointer in time, so we
+            // try again.
+            goto TryAcquire;
+        }
         i1 = index_hash(ti, hv);
         i2 = alt_index(ti, hv, i1);
         lock_two(ti, i1, i2);
@@ -279,11 +355,17 @@ private:
     // later one, rather than retrying
     inline TableInfo* snapshot_and_lock_all() {
         TableInfo* ti = table_info.load();
+        *_cuckoohash_hazard_pointer = static_cast<void*>(ti);
+        if (ti != table_info.load()) {
+            unset_hazard_pointer();
+            return nullptr;
+        }
         for (size_t i = 0; i < kNumLocks; i++) {
             ti->locks_[i].lock();
         }
         if (ti != table_info.load()) {
             unlock_all(ti);
+            unset_hazard_pointer();
             return nullptr;
         }
         return ti;
@@ -797,6 +879,7 @@ private:
     */
     cuckoo_status cuckoo_find(const key_type &key,
                               mapped_type &val) {
+        check_hazard_pointer();
         uint32_t hv = hashed_key(key);
         TableInfo* ti;
         size_t i1, i2;
@@ -808,6 +891,7 @@ private:
 
         bool res = try_read_from_bucket(ti, key, val, i2);
         unlock_two(ti, i1, i2);
+        unset_hazard_pointer();
 
         if (res) {
             return ok;
@@ -829,6 +913,7 @@ private:
     */
     cuckoo_status cuckoo_insert(const key_type &key,
                                 const mapped_type &val) {
+        check_hazard_pointer();
         uint32_t hv = hashed_key(key);
         TableInfo* ti;
         size_t i1, i2;
@@ -836,11 +921,13 @@ private:
         // try to add new key to bucket i1 first, then try bucket i2
         if (try_add_to_bucket(ti, key, val, i1)) {
             unlock_two(ti, i1, i2);
+            unset_hazard_pointer();
             return ok;
         }
 
         if (try_add_to_bucket(ti, key, val, i2)) {
             unlock_two(ti, i1, i2);
+            unset_hazard_pointer();
             return ok;
         }
 
@@ -859,6 +946,7 @@ private:
             // calling insert method to try again by returning
             // failure_under_expansion
             unlock(ti, insert_bucket);
+            unset_hazard_pointer();
             return failure_under_expansion;
         } else if (st == ok) {
             assert(!ti->locks_[lock_ind(insert_bucket)].try_lock());
@@ -869,12 +957,14 @@ private:
             set_slot_used(ti, insert_bucket, insert_slot);
             ti->hashitems_.fetch_add(1);
             unlock(ti, insert_bucket);
+            unset_hazard_pointer();
             return ok;
         }
 
         assert(st == failure);
         DBG("hash table is full (hashpower = %zu, hash_items = %zu, load factor = %.2f), need to increase hashpower\n",
             ti->hashpower_, ti->hashitems_.load(), 1.0 * ti->hashitems_.load() / SLOT_PER_BUCKET / hashsize(ti->hashpower_));
+        unset_hazard_pointer();
         return failure_table_full;
     }
 
@@ -889,17 +979,20 @@ private:
     * @return ok on success
     */
     cuckoo_status cuckoo_delete(const key_type &key) {
+        check_hazard_pointer();
         uint32_t hv = hashed_key(key);
         TableInfo* ti;
         size_t i1, i2;
         snapshot_and_lock_two(hv, ti, i1, i2);
         if (try_del_from_bucket(ti, key, i1)) {
             unlock_two(ti, i1, i2);
+            unset_hazard_pointer();
             return ok;
         }
 
         bool res = try_del_from_bucket(ti, key, i2);
         unlock_two(ti, i1, i2);
+        unset_hazard_pointer();
         if (res) {
             return ok;
         }
@@ -1070,12 +1163,12 @@ private:
         table_info.store(new_map.table_info.load());
         new_map.table_info.store(nullptr);
         // Rather than deleting ti now, we store it in
-        // old_table_infos. All the memory in old_table_infos will be
-        // deleted when the hash table's destructor is called. This
-        // probably wastes extra memory, but reference counting is too
-        // expensive.
+        // old_table_infos. The hazard pointer manager will delete it
+        // if no other threads are using the pointer.
         old_table_infos.push_back(ti);
         unlock_all(ti);
+        unset_hazard_pointer();
+        global_hazard_pointers.delete_unused(old_table_infos);
         return ok;
     }
 
@@ -1127,6 +1220,7 @@ public:
    // and slot to the beginning or end of the table, based on the
    // boolean argument
    c_iterator(cuckoohash_map<K, V, H> *hm, bool is_end) {
+       check_hazard_pointer();
        hm_ = hm;
        do {
            ti_ = hm_->snapshot_and_lock_all();
@@ -1168,6 +1262,7 @@ public:
    void release() {
        if (has_table_lock) {
            hm_->unlock_all(ti_);
+           unset_hazard_pointer();
            has_table_lock = false;
        }
    }
