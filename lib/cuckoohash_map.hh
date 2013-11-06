@@ -12,6 +12,7 @@
 #include <mutex>
 #include <vector>
 #include <list>
+#include <unistd.h>
 
 #include "cuckoohash_config.h"
 #include "cuckoohash_util.h"
@@ -181,7 +182,18 @@ public:
     // wants to check, so it contends with writes.
     bool find(const key_type& key, mapped_type& val) {
         if (size() == 0) return false;
-        return (cuckoo_find(key, val) == ok);
+
+        check_hazard_pointer();
+        uint32_t hv = hashed_key(key);
+        TableInfo* ti;
+        size_t i1, i2;
+        snapshot_and_lock_two(hv, ti, i1, i2);
+
+        const cuckoo_status st = cuckoo_find(key, val, hv, ti, i1, i2);
+        unlock_two(ti, i1, i2);
+        unset_hazard_pointer();
+
+        return (st == ok);
     }
 
     value_type find(const key_type& key) {
@@ -199,14 +211,22 @@ public:
 
     // Insertion routines
     bool insert(const key_type& key, const mapped_type& val) {
+        check_hazard_pointer();
+        uint32_t hv = hashed_key(key);
+        TableInfo* ti;
+        size_t i1, i2;
+        snapshot_and_lock_two(hv, ti, i1, i2);
+
         cuckoo_status st;
         mapped_type oldval;
-        st = cuckoo_find(key, oldval);
+        st = cuckoo_find(key, oldval, hv, ti, i1, i2);
         if (ok == st) {
+            unlock_two(ti, i1, i2);
+            unset_hazard_pointer();
             return false; // failure_key_duplicated;
         }
 
-        st = cuckoo_insert(key, val);
+        st = cuckoo_insert(key, val, hv, ti, i1, i2);
         // If the insert failed, it tries again
         while (st != ok) {
             // cuckoo_insert could have either failed with
@@ -220,7 +240,8 @@ public:
                     DBG("expansion is on-going\n", NULL);
                 }
             }
-            st = cuckoo_insert(key, val);
+            snapshot_and_lock_two(hv, ti, i1, i2);
+            st = cuckoo_insert(key, val, hv, ti, i1, i2);
         }
 
         // if (expanding_.load()) {
@@ -235,7 +256,17 @@ public:
 
     // Deletion routines
     bool erase(const key_type& key) {
-        return (cuckoo_delete(key) == ok);
+        check_hazard_pointer();
+        uint32_t hv = hashed_key(key);
+        TableInfo* ti;
+        size_t i1, i2;
+        snapshot_and_lock_two(hv, ti, i1, i2);
+
+        const cuckoo_status st = cuckoo_delete(key, ti, i1, i2);
+        unlock_two(ti, i1, i2);
+        unset_hazard_pointer();
+
+        return (st == ok);
     }
 
     // None standard functions:
@@ -401,7 +432,7 @@ private:
         return bucket_ind & (kNumLocks - 1);
     }
 
-    uint32_t hashed_key(const key_type &key) {
+    static inline uint32_t hashed_key(const key_type &key) {
         // return hasher()(key);
         return CityHash32((const char*) &key, kKeySize);
     }
@@ -413,7 +444,7 @@ private:
      *
      * @return The first bucket
      */
-    size_t index_hash(const TableInfo* ti, const uint32_t hv) const {
+    static inline size_t index_hash(const TableInfo* ti, const uint32_t hv) {
         return hv & hashmask(ti->hashpower_);
     }
 
@@ -426,9 +457,9 @@ private:
      *
      * @return  The second bucket
      */
-    size_t alt_index(const TableInfo* ti,
+    static inline size_t alt_index(const TableInfo* ti,
                      const uint32_t hv,
-                     const size_t index) const {
+                     const size_t index) {
         uint32_t tag = (hv >> 24) + 1; // ensure tag is nonzero for the multiply
         /* 0x5bd1e995 is the hash constant from MurmurHash2 */
         return (index ^ (tag * 0x5bd1e995)) & hashmask(ti->hashpower_);
@@ -528,35 +559,35 @@ private:
             b_slot x = q.dequeue();
             // Picks a random slot to start from
             const size_t start = (cheap_rand() >> 20) % SLOT_PER_BUCKET;
-            const size_t old_pathcode = x.pathcode;
-            // We lock the bucket so that no changes occur while
-            // iterating
-            lock(ti, x.bucket);
             for (size_t i = 0; i < SLOT_PER_BUCKET && q.not_full(); i++) {
                 size_t slot = (i+start) % SLOT_PER_BUCKET;
-                // We add the current slot to x's pathcode. We store
-                // all of the slots in pathcode by treating it as a
-                // number with radix SLOT_PER_BUCKET, shifting the
-                // existing path over one and adding the current slot
-                x.pathcode = old_pathcode * SLOT_PER_BUCKET + slot;
-                assert(slot == x.pathcode % SLOT_PER_BUCKET);
-                if (is_slot_empty(ti, x.bucket, slot)) {
-                    // This slot is empty, so we are done
-                    unlock(ti, x.bucket);
-                    return x;
-                } else if (x.depth == MAX_BFS_DEPTH) {
-                    // We can't extend this cuckoo path because it is
-                    // already at the maximum depth
-                    continue;
-                } else {
-                    // Extend the cuckoo path with the current slot,
-                    // storing the alterate bucket of the key at the
-                    // current slot
-                    uint32_t hv = hashed_key(ti->buckets_[x.bucket].keys[slot]);
-                    q.enqueue(b_slot(alt_index(ti, hv, x.bucket), x.pathcode, x.depth+1));
+                // Create a new b_slot item, that represents the
+                // bucket we would look at after searching x.bucket
+                // for empty slots. This means we completely skip
+                // searching i1 and i2, but they should have already
+                // been searched by cuckoo_insert, so that's okay.
+                const uint32_t hv = hashed_key(ti->buckets_[x.bucket].keys[slot]);
+                b_slot y(alt_index(ti, hv, x.bucket), x.pathcode * SLOT_PER_BUCKET + slot, x.depth+1);
+
+                // Check if any of the slots in the prospective bucket
+                // are empty, and, if so, return that b_slot. We lock
+                // the bucket so that no changes occur while
+                // iterating.
+                lock(ti, y.bucket);
+                for (int m = 0; m < SLOT_PER_BUCKET; m++) {
+                    const size_t j = (start+m) % SLOT_PER_BUCKET;
+                    if (is_slot_empty(ti, y.bucket, j)) {
+                        y.pathcode = y.pathcode * SLOT_PER_BUCKET + j;
+                        unlock(ti, y.bucket);
+                        return y;
+                    }
                 }
+                unlock(ti, y.bucket);
+
+                // No empty slots were found, so we push this onto the
+                // queue
+                q.enqueue(y);
             }
-            unlock(ti, x.bucket);
         }
         // We didn't find a short-enough cuckoo path, so the queue ran
         // out of space. Return a failure value
@@ -607,8 +638,7 @@ private:
         }
         for (int i = 1; i <= x.depth; i++) {
             CuckooRecord *prev = curr++;
-            uint32_t prevhv = hashed_key(prev->key);
-            assert(prev->bucket == index_hash(ti, prevhv) || prev->bucket == alt_index(ti, prevhv, index_hash(ti, prevhv)));
+            assert(prev->bucket == index_hash(ti, hashed_key(prev->key)) || prev->bucket == alt_index(ti, hashed_key(prev->key), index_hash(ti, hashed_key(prev->key))));
             // We get the bucket that this slot is on by computing the
             // alternate index of the previous bucket
             curr->bucket = alt_index(ti, hashed_key(prev->key), prev->bucket);
@@ -865,7 +895,9 @@ private:
 
 
    /* non-thread safe cuckoo hashing functions: cuckoo_find,
-    * cuckoo_insert, cuckoo_delete cuckoo_expand, cuckoo_report */
+    * cuckoo_insert, cuckoo_delete cuckoo_expand, cuckoo_report. It
+    * expects the locks to already be taken, and releases none of
+    * them. */
 
    /**
     * @brief find key in bucket i1 and i2
@@ -878,22 +910,16 @@ private:
     * @return ok on success
     */
     cuckoo_status cuckoo_find(const key_type &key,
-                              mapped_type &val) {
-        check_hazard_pointer();
-        uint32_t hv = hashed_key(key);
-        TableInfo* ti;
-        size_t i1, i2;
-        snapshot_and_lock_two(hv, ti, i1, i2);
+                              mapped_type &val,
+                              const uint32_t hv,
+                              const TableInfo* ti,
+                              const size_t i1,
+                              const size_t i2) {
+
         if (try_read_from_bucket(ti, key, val, i1)) {
-            unlock_two(ti, i1, i2);
             return ok;
         }
-
-        bool res = try_read_from_bucket(ti, key, val, i2);
-        unlock_two(ti, i1, i2);
-        unset_hazard_pointer();
-
-        if (res) {
+        if (try_read_from_bucket(ti, key, val, i2)) {
             return ok;
         }
         return failure_key_not_found;
@@ -901,7 +927,8 @@ private:
 
    /**
     * @brief insert (key, val) to bucket i1 or i2. The locks should be
-    * acquired by the caller, but they are released here.
+    * acquired by the caller, but they are released here. The hazard
+    * pointer is also unset.
     *
     * @param key the key to insert
     * @param val the value associated with this key
@@ -912,22 +939,19 @@ private:
     * @return ok on success
     */
     cuckoo_status cuckoo_insert(const key_type &key,
-                                const mapped_type &val) {
-        check_hazard_pointer();
-        uint32_t hv = hashed_key(key);
-        TableInfo* ti;
-        size_t i1, i2;
-        snapshot_and_lock_two(hv, ti, i1, i2);
+                                const mapped_type &val,
+                                const uint32_t hv,
+                                TableInfo* ti,
+                                const size_t i1,
+                                const size_t i2) {
         // try to add new key to bucket i1 first, then try bucket i2
         if (try_add_to_bucket(ti, key, val, i1)) {
             unlock_two(ti, i1, i2);
-            unset_hazard_pointer();
             return ok;
         }
 
         if (try_add_to_bucket(ti, key, val, i2)) {
             unlock_two(ti, i1, i2);
-            unset_hazard_pointer();
             return ok;
         }
 
@@ -978,22 +1002,14 @@ private:
     *
     * @return ok on success
     */
-    cuckoo_status cuckoo_delete(const key_type &key) {
-        check_hazard_pointer();
-        uint32_t hv = hashed_key(key);
-        TableInfo* ti;
-        size_t i1, i2;
-        snapshot_and_lock_two(hv, ti, i1, i2);
+    cuckoo_status cuckoo_delete(const key_type &key,
+                                TableInfo* ti,
+                                const size_t i1,
+                                const size_t i2) {
         if (try_del_from_bucket(ti, key, i1)) {
-            unlock_two(ti, i1, i2);
-            unset_hazard_pointer();
             return ok;
         }
-
-        bool res = try_del_from_bucket(ti, key, i2);
-        unlock_two(ti, i1, i2);
-        unset_hazard_pointer();
-        if (res) {
+        if (try_del_from_bucket(ti, key, i2)) {
             return ok;
         }
         return failure_key_not_found;
@@ -1146,7 +1162,7 @@ private:
         // Creates a new hash table twice the size and adds all the
         // elements from the old buckets
         cuckoohash_map<Key, T, Hash> new_map(ti->hashpower_+1);
-        const size_t threadnum = std::thread::hardware_concurrency();
+        const size_t threadnum = sysconf(_SC_NPROCESSORS_ONLN);
         const size_t buckets_per_thread = hashsize(ti->hashpower_) / threadnum;
         std::vector<std::thread> insertion_threads(threadnum);
         for (size_t i = 0; i < threadnum-1; i++) {
