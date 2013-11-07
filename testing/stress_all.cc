@@ -25,6 +25,7 @@
 
 typedef uint32_t KeyType;
 typedef uint32_t ValType;
+typedef int32_t ValType2;
 typedef std::pair<KeyType, ValType> KVPair;
 
 // The number of keys that can be inserted, deleted, and searched on
@@ -43,6 +44,9 @@ bool disable_inserts = false;
 // Whether to disable deletes or not. This can be set with the command
 // line flag --disable-deletes
 bool disable_deletes = false;
+// Whether to disable updates or not. This can be set with the command
+// line flag --disable-updates
+bool disable_updates = false;
 // Whether to disable finds or not. This can be set with the command
 // line flag --disable-finds
 bool disable_finds = false;
@@ -58,13 +62,15 @@ std::atomic<bool> finished = ATOMIC_VAR_INIT(false);
 
 std::atomic<size_t> num_inserts = ATOMIC_VAR_INIT(0);
 std::atomic<size_t> num_deletes = ATOMIC_VAR_INIT(0);
+std::atomic<size_t> num_updates = ATOMIC_VAR_INIT(0);
 std::atomic<size_t> num_finds = ATOMIC_VAR_INIT(0);
 
 class AllEnvironment : public ::testing::Environment {
 public:
     AllEnvironment()
-        : table(power), keys(numkeys), vals(numkeys), in_table(new bool[numkeys]), in_use(numkeys),
+        : table(power), table2(power), keys(numkeys), vals(numkeys), vals2(numkeys), in_table(new bool[numkeys]), in_use(numkeys),
           val_dist(std::numeric_limits<ValType>::min(), std::numeric_limits<ValType>::max()),
+          val_dist2(std::numeric_limits<ValType2>::min(), std::numeric_limits<ValType2>::max()),
           ind_dist(0, numkeys-1)
         {}
 
@@ -86,11 +92,14 @@ public:
     }
 
     cuckoohash_map<KeyType, ValType> table;
+    cuckoohash_map<KeyType, ValType2> table2;
     std::vector<KeyType> keys;
     std::vector<ValType> vals;
+    std::vector<ValType2> vals2;
     std::unique_ptr<bool[]> in_table;
     std::vector<std::atomic_flag> in_use;
     std::uniform_int_distribution<ValType> val_dist;
+    std::uniform_int_distribution<ValType2> val_dist2;
     std::uniform_int_distribution<size_t> ind_dist;
     size_t gen_seed;
 };
@@ -101,27 +110,32 @@ void insert_thread() {
     std::mt19937_64 gen(env->gen_seed);
     while (!finished.load()) {
         // Pick a random number between 0 and numkeys. If that slot is
-        // not in use, lock the slot. If the value is already in the
-        // table, clear in_use and continue. Otherwise, insert a
-        // random value into the table, check that the insertion was
-        // actually successful with another find operation, and then
-        // store the value in the array and set in_table to true and
-        // clear in_use
+        // not in use, lock the slot. Insert a random value into both
+        // tables. The inserts should only be successful if the key
+        // wasn't in the table. If the inserts succeeded, check that
+        // the insertion were actually successful with another find
+        // operation, and then store the values in their arrays and
+        // set in_table to true and clear in_use
         size_t ind = env->ind_dist(gen);
         if (!env->in_use[ind].test_and_set()) {
-            if (env->in_table[ind] == false) {
-                KeyType k = ind;
-                ValType v = env->val_dist(gen);
-                bool res = env->table.insert(k, v);
-                EXPECT_TRUE(res);
-                if (res) {
-                    ValType find_v;
-                    EXPECT_TRUE(env->table.find(k, find_v));
-                    EXPECT_EQ(v, find_v);
-                    env->vals[ind] = v;
-                    env->in_table[ind] = true;
-                    num_inserts.fetch_add(1, std::memory_order_relaxed);
-                }
+            KeyType k = ind;
+            ValType v = env->val_dist(gen);
+            ValType2 v2 = env->val_dist2(gen);
+            bool res = env->table.insert(k, v);
+            bool res2 = env->table2.insert(k, v2);
+            EXPECT_NE(res, env->in_table[ind]);
+            EXPECT_NE(res2, env->in_table[ind]);
+            if (res) {
+                ValType find_v;
+                ValType2 find_v2;
+                EXPECT_TRUE(env->table.find(k, find_v));
+                EXPECT_EQ(v, find_v);
+                EXPECT_TRUE(env->table2.find(k, find_v2));
+                EXPECT_EQ(v2, find_v2);
+                env->vals[ind] = v;
+                env->vals2[ind] = v2;
+                env->in_table[ind] = true;
+                num_inserts.fetch_add(2, std::memory_order_relaxed);
             }
             env->in_use[ind].clear();
         }
@@ -131,50 +145,89 @@ void insert_thread() {
 void delete_thread() {
     std::mt19937_64 gen(env->gen_seed);
     while (!finished.load()) {
-        // Run a delete on a random key that is in the table, check
-        // that the key is indeed not in the table anymore, and then
-        // set in_table to false
+        // Run deletes on a random key, check that the deletes
+        // succeeded only if the keys were in the table. If the
+        // deletes succeeded, check that the keys are indeed not in
+        // the tables anymore, and then set in_table to false
         size_t ind = env->ind_dist(gen);
         if (!env->in_use[ind].test_and_set()) {
-            if (env->in_table[ind] == true) {
-                KeyType k = ind;
-                bool res = env->table.erase(k);
-                EXPECT_TRUE(res);
-                if (res) {
-                    ValType find_v;
-                    res = env->table.find(k, find_v);
-                    EXPECT_FALSE(res);
-                    env->in_table[ind] = false;
-                    num_deletes.fetch_add(1, std::memory_order_relaxed);
-                }
+            KeyType k = ind;
+            bool res = env->table.erase(k);
+            bool res2 = env->table2.erase(k);
+            EXPECT_EQ(res, env->in_table[ind]);
+            EXPECT_EQ(res2, env->in_table[ind]);
+            if (res) {
+                ValType find_v;
+                ValType2 find_v2;
+                EXPECT_FALSE(env->table.find(k, find_v));
+                EXPECT_FALSE(env->table2.find(k, find_v2));
+                env->in_table[ind] = false;
+                num_deletes.fetch_add(2, std::memory_order_relaxed);
             }
             env->in_use[ind].clear();
         }
     }
 }
 
+void update_thread() {
+    std::mt19937_64 gen(env->gen_seed);
+    while (!finished.load()) {
+        // Run updates on a random key, check that the updates
+        // succeeded only if the keys were in the table. If the
+        // updates succeeded, check that the keys are indeed in the
+        // table with the new value, and then set in_table to true
+        size_t ind = env->ind_dist(gen);
+        if (!env->in_use[ind].test_and_set()) {
+            KeyType k = ind;
+            ValType v = env->val_dist(gen);
+            ValType2 v2 = env->val_dist2(gen);
+            bool res = env->table.update(k, v);
+            bool res2 = env->table2.update(k, v2);
+            EXPECT_EQ(res, env->in_table[ind]);
+            EXPECT_EQ(res2, env->in_table[ind]);
+            if (res) {
+                ValType find_v;
+                ValType2 find_v2;
+                EXPECT_TRUE(env->table.find(k, find_v));
+                EXPECT_EQ(v, find_v);
+                EXPECT_TRUE(env->table2.find(k, find_v2));
+                EXPECT_EQ(v2, find_v2);
+                env->vals[ind] = v;
+                env->vals2[ind] = v2;
+                num_updates.fetch_add(2, std::memory_order_relaxed);
+            }
+            env->in_use[ind].clear();
+        }
+    }
+}
+
+
 void find_thread() {
     std::mt19937_64 gen(env->gen_seed);
     while (!finished.load()) {
-        // Run a find on a random key and check that the presence of
-        // the key matches in_table
+        // Run finds on a random key and check that the presence of
+        // the keys matches in_table
         size_t ind = env->ind_dist(gen);
         bool expected = false;
         if (!env->in_use[ind].test_and_set()) {
             KeyType k = ind;
             ValType v;
+            ValType2 v2;
             bool res = env->table.find(k, v);
+            bool res2 = env->table2.find(k, v2);
             EXPECT_EQ(env->in_table[ind], res);
+            EXPECT_EQ(env->in_table[ind], res2);
             if (res) {
                 EXPECT_EQ(v, env->vals[ind]);
+                EXPECT_EQ(v2, env->vals2[ind]);
             }
-            num_finds.fetch_add(1, std::memory_order_relaxed);
+            num_finds.fetch_add(2, std::memory_order_relaxed);
             env->in_use[ind].clear();
         }
     }
 }
 
-// Spawns thread_num insert, delete, and find threads
+// Spawns thread_num insert, delete, update, and find threads
 TEST(AllTest, Everything) {
     std::vector<std::thread> threads;
     for (size_t i = 0; i < thread_num; i++) {
@@ -183,6 +236,9 @@ TEST(AllTest, Everything) {
         }
         if (!disable_deletes) {
             threads.emplace_back(delete_thread);
+        }
+        if (!disable_updates) {
+            threads.emplace_back(update_thread);
         }
         if (!disable_finds) {
             threads.emplace_back(find_thread);
@@ -205,6 +261,7 @@ TEST(AllTest, Everything) {
     std::cout << "----------Results----------" << std::endl;
     std::cout << "Number of inserts:\t" << num_inserts.load() << std::endl;
     std::cout << "Number of deletes:\t" << num_deletes.load() << std::endl;
+    std::cout << "Number of updates:\t" << num_updates.load() << std::endl;
     std::cout << "Number of finds:\t" << num_finds.load() << std::endl;
     std::cout << "Table report:" << std::endl;
     env->table.report();
@@ -217,12 +274,13 @@ int main(int argc, char** argv) {
                               "The number of threads to spawn for each type of operation",
                               "The number of seconds to run the test for",
                               "The seed for the random number generator"};
-    const char* flags[] = {"--disable-inserts", "--disable-deletes", "--disable-finds"};
-    bool* flag_vars[] = {&disable_inserts, &disable_deletes, &disable_finds};
+    const char* flags[] = {"--disable-inserts", "--disable-deletes", "--disable-updates", "--disable-finds"};
+    bool* flag_vars[] = {&disable_inserts, &disable_deletes, &disable_updates, &disable_finds};
     const char* flag_help[] = {"If set, no inserts will be run",
                                "If set, no deletes will be run",
+                               "If set, no updates will be run",
                                "If set, no finds will be run"};
-    parse_flags(argc, argv, args, arg_vars, arg_help, 4, flags, flag_vars, flag_help, 3);
+    parse_flags(argc, argv, args, arg_vars, arg_help, sizeof(args)/sizeof(const char*), flags, flag_vars, flag_help, sizeof(flags)/sizeof(const char*));
 
     env = (AllEnvironment*) ::testing::AddGlobalTestEnvironment(new AllEnvironment);
     ::testing::InitGoogleTest(&argc, argv);

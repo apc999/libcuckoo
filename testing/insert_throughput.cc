@@ -17,6 +17,7 @@
 #include <atomic>
 #include <thread>
 #include <unistd.h>
+#include <sys/time.h>
 
 #include "commandline_parser.cc"
 #include "cuckoohash_map.hh"
@@ -79,13 +80,11 @@ public:
             keys[swapind] = i+numkeys;
         }
 
-        // We prefill the table to begin_load with as many threads as
-        // there are processors, giving each thread enough keys to
-        // insert
+        // We prefill the table to begin_load with thread_num threads,
+        // giving each thread enough keys to insert
         std::vector<std::thread> threads;
-        const size_t max_thread_num = sysconf(_SC_NPROCESSORS_ONLN);
-        size_t keys_per_thread = numkeys * (begin_load / 100.0) / max_thread_num;
-        for (size_t i = 0; i < max_thread_num; i++) {
+        size_t keys_per_thread = numkeys * (begin_load / 100.0) / thread_num;
+        for (size_t i = 0; i < thread_num; i++) {
             threads.emplace_back(insert_thread, std::ref(table), keys.begin()+i*keys_per_thread, keys.begin()+(i+1)*keys_per_thread);
         }
         for (size_t i = 0; i < threads.size(); i++) {
@@ -109,22 +108,24 @@ InsertEnvironment* env;
 TEST(InsertThroughputTest, Everything) {
     std::vector<std::thread> threads;
     size_t keys_per_thread = env->numkeys * ((end_load-begin_load) / 100.0) / thread_num;
-    auto t1 = std::chrono::high_resolution_clock::now();
+    timeval t1, t2;
+    gettimeofday(&t1, NULL);
     for (size_t i = 0; i < thread_num; i++) {
         threads.emplace_back(insert_thread, std::ref(env->table), env->keys.begin()+(i*keys_per_thread)+env->init_size, env->keys.begin()+((i+1)*keys_per_thread)+env->init_size);
     }
     for (size_t i = 0; i < threads.size(); i++) {
         threads[i].join();
     }
-    auto t2 = std::chrono::high_resolution_clock::now();
-    auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(t2-t1);
+    gettimeofday(&t2, NULL);
+    double elapsed_time = (t2.tv_sec - t1.tv_sec) * 1000.0; // sec to ms
+    elapsed_time += (t2.tv_usec - t1.tv_usec) / 1000.0; // us to ms
     size_t num_inserts = env->table.size() - env->init_size;
     // Reports the results
     std::cout << "----------Results----------" << std::endl;
     std::cout << "Final load factor:\t" << env->table.load_factor() << std::endl;
     std::cout << "Number of inserts:\t" << num_inserts << std::endl;
-    std::cout << "Time elapsed:\t" << elapsed_time.count() << " milliseconds" << std::endl;
-    std::cout << "Throughput: " << (double)num_inserts / (double)elapsed_time.count() << " inserts/ms" << std::endl;
+    std::cout << "Time elapsed:\t" << elapsed_time << " milliseconds" << std::endl;
+    std::cout << "Throughput: " << (double)num_inserts / elapsed_time << " inserts/ms" << std::endl;
 }
 
 int main(int argc, char** argv) {

@@ -9,9 +9,13 @@ AC_CONFIG_HEADERS([config.h])
 
 AC_CONFIG_MACRO_DIR([m4])
 
-dnl CFLAGS="-pg -DNDEBUG"
-dnl CXXFLAGS="-pg -DNDEBUG"
-dnl CPPFLAGS="-pg -DNDEBUG"
+dnl CFLAGS="-g -gdwarf-2"
+dnl CXXFLAGS="-g -gdwarf-2"
+dnl CPPFLAGS="-g -gdwarf-2"
+
+dnl cflags="-pg -gdwarf-2 -DNDEBUG"
+dnl CXXFLAGS="-pg -gdwarf-2 -DNDEBUG"
+dnl CPPFLAGS="-pg -gdwarf-2 -DNDEBUG"
 
 CFLAGS="-O3 -DNDEBUG"
 CXXFLAGS="-O3 -DNDEBUG"

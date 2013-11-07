@@ -33,6 +33,6 @@ m4/*
 */*.o
 perf*
 testing/*.a
-testing/.deps
-testing/.libs
+testing/.deps/
+testing/.libs/
 testing/*.out
