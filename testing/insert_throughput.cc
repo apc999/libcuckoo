@@ -92,6 +92,7 @@ public:
         }
 
         init_size = table.size();
+        ASSERT_TRUE(init_size == keys_per_thread * thread_num);
 
         std::cout << "Table with capacity " << numkeys << " prefilled to a load factor of " << table.load_factor() << std::endl;
     }

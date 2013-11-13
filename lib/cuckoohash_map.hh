@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <cassert>
+#include <cstdint>
 #include <memory>
 #include <atomic>
 #include <thread>
@@ -16,6 +17,7 @@
 #include <limits>
 #include <bitset>
 #include <unistd.h>
+#include <sched.h>
 
 #include "cuckoohash_config.h"
 #include "util.h"
@@ -152,14 +154,21 @@ public:
         cuckoo_clear();
     }
 
-    /* size returns the number of items currently in the hash
-     * table. */
+    /* size returns the number of items currently in the hash table.
+     * Since it doesn't lock the table, elements can be inserted
+     * during the computation, so the result may not necessarily be
+     * exact. */
     size_type size() {
         check_hazard_pointer();
-        TableInfo* ti = snapshot_table_nolock();
-        const size_t hashitems = ti->hashitems_.load();
+        const TableInfo *ti = snapshot_table_nolock();
+        size_t inserts = 0;
+        size_t deletes = 0;
+        for (size_t i = 0; i < ti->num_inserts.size(); i++) {
+            inserts += ti->num_inserts[i].num.load();
+            deletes += ti->num_deletes[i].num.load();
+        }
         unset_hazard_pointer();
-        return hashitems;
+        return inserts - deletes;
     }
 
     /* empty returns true if the table is empty. */
@@ -332,6 +341,15 @@ private:
         mapped_type vals[SLOT_PER_BUCKET];
     } Bucket;
 
+    /* bigint is a cache-aligned atomic size_t type. */
+    struct bigint {
+        std::atomic<size_t> num;
+        bigint() {}
+        bigint(bigint&& x) {
+            num.store(x.num.load());
+        }
+    } __attribute__((aligned(64)));
+
     /* TableInfo contains the entire state of the hashtable. We
      * allocate one TableInfo pointer per hash table and store all of
      * the table memory in it, so that all the data can be atomically
@@ -339,8 +357,6 @@ private:
     struct TableInfo {
         // size of the table in bytes
         size_t tablesize_;
-
-        std::atomic<size_t> hashitems_;
 
         // 2**hashpower is the number of buckets
         size_t hashpower_;
@@ -350,6 +366,11 @@ private:
 
         // unique pointer to the array of mutexes
         std::unique_ptr<std::mutex[]> locks_;
+
+        // per-core counters for the number of inserts
+        std::vector<bigint> num_inserts;
+        // per-core counters for the number of deletes
+        std::vector<bigint> num_deletes;
     };
     std::atomic<TableInfo*> table_info;
 
@@ -546,6 +567,9 @@ private:
 
     // number of locks in the locks_ array
     static const size_t kNumLocks = 1 << 13;
+
+    // number of cores on the machine
+    static const size_t kNumCores;
 
     /* lock_ind converts an index into buckets_ to an index into
      * locks_. */
@@ -937,7 +961,7 @@ private:
         ti->buckets_[i].keys[j] = key;
         ti->buckets_[i].vals[j] = val;
         ti->buckets_[i].occupied.set(j);
-        ti->hashitems_++;
+        ti->num_inserts[sched_getcpu()].num++;
     }
 
     /* try_add_to_bucket will search the bucket for an empty slot and
@@ -967,7 +991,7 @@ private:
             }
             if (ti->buckets_[i].keys[j] == key) {
                 ti->buckets_[i].occupied.reset(j);
-                ti->hashitems_--;
+                ti->num_deletes[sched_getcpu()].num++;
                 return true;
             }
         }
@@ -976,14 +1000,12 @@ private:
 
     /* try_update_bucket will search the bucket for the given key and
      * change its associated value if it finds it. */
-    /* try_del_from_bucket will search the bucket for the given key,
-     * and set the slot of the key to empty if it finds it. */
     static bool try_update_bucket(TableInfo *ti,
                                   const key_type &key,
                                   const mapped_type &value,
                                   const size_t i) {
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
-            if (!ti->buckets_[i].occupied[j] && ti->buckets_[i].keys[j] == key) {
+            if (ti->buckets_[i].occupied[j] && ti->buckets_[i].keys[j] == key) {
                 ti->buckets_[i].vals[j] = value;
                 return true;
             }
@@ -1101,7 +1123,8 @@ private:
     }
 
     /* cuckoo_init initializes the hashtable, given an initial
-     * hashpower as the argument. */
+     * hashpower as the argument. It allocates one bigint for each
+     * core in num_inserts and num_deletes. */
     cuckoo_status cuckoo_init(const size_t hashtable_init) {
         TableInfo *new_table_info = new TableInfo;
         try {
@@ -1109,12 +1132,13 @@ private:
             new_table_info->tablesize_ = sizeof(Bucket) * hashsize(new_table_info->hashpower_);
             new_table_info->buckets_.reset(new Bucket[hashsize(new_table_info->hashpower_)]);
             new_table_info->locks_.reset(new std::mutex[kNumLocks]);
+            new_table_info->num_inserts.resize(kNumCores);
+            new_table_info->num_deletes.resize(kNumCores);
         } catch (std::bad_alloc&) {
             delete new_table_info;
             return failure;
         }
 
-        new_table_info->hashitems_ = 0;
         table_info.store(new_table_info);
         cuckoo_clear();
 
@@ -1126,11 +1150,16 @@ private:
         check_hazard_pointer();
         TableInfo *ti = snapshot_and_lock_all();
         if (ti == nullptr) {
-            return failure_under_expansion;
+            return cuckoo_clear();
         }
 
         for (size_t i = 0; i < hashsize(ti->hashpower_); i++) {
             ti->buckets_[i].occupied.reset();
+        }
+       
+        for (size_t i = 0; i < ti->num_inserts.size(); i++) {
+            ti->num_inserts[i].num = 0;
+            ti->num_deletes[i].num = 0;
         }
 
         unlock_all(ti);
@@ -1163,7 +1192,7 @@ private:
         // Creates a new hash table twice the size and adds all the
         // elements from the old buckets
         cuckoohash_map<Key, T, Hash> new_map(ti->hashpower_+1);
-        const size_t threadnum = sysconf(_SC_NPROCESSORS_ONLN);
+        const size_t threadnum = kNumCores;
         const size_t buckets_per_thread = hashsize(ti->hashpower_) / threadnum;
         std::vector<std::thread> insertion_threads(threadnum);
         for (size_t i = 0; i < threadnum-1; i++) {
@@ -1216,6 +1245,9 @@ __thread void** cuckoohash_map<Key, T, Hash>::hazard_pointer = nullptr;
 template <class Key, class T, class Hash>
 typename cuckoohash_map<Key, T, Hash>::GlobalHazardPointerList
 cuckoohash_map<Key, T, Hash>::global_hazard_pointers;
+
+template <class Key, class T, class Hash>
+const size_t cuckoohash_map<Key, T, Hash>::kNumCores = sysconf(_SC_NPROCESSORS_ONLN);
 
 /* An iterator through the table that is thread safe. For the duration
  * of its existence, it takes all the locks on the table it is given,
