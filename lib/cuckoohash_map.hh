@@ -14,7 +14,7 @@
 #include <list>
 #include <cmath>
 #include <limits>
-#include <initializer_list>
+#include <bitset>
 #include <unistd.h>
 
 #include "cuckoohash_config.h"
@@ -147,27 +147,28 @@ public:
         }
     }
 
+    /* clear removes all the elements in the hash table. */
     void clear() {
         cuckoo_clear();
     }
 
+    /* size returns the number of items currently in the hash
+     * table. */
     size_type size() {
         check_hazard_pointer();
-        TableInfo *ti = snapshot_table_nolock();
-        const size_type hashitems = ti->hashitems_.load();
+        TableInfo* ti = snapshot_table_nolock();
+        const size_t hashitems = ti->hashitems_.load();
         unset_hazard_pointer();
         return hashitems;
     }
 
-    size_type max_size() const {
-        assert(false);
-        return 0;
-    }
-
-    bool empty() const {
+    /* empty returns true if the table is empty. */
+    bool empty() {
         return size() == 0;
     }
 
+    /* hashpower returns the hashpower of the table, which is log2(the
+     * number of buckets). */
     size_type hashpower() {
         check_hazard_pointer();
         TableInfo* ti = snapshot_table_nolock();
@@ -176,6 +177,7 @@ public:
         return hashpower;
     }
 
+    /* bucket_count returns the number of buckets in the table. */
     size_type bucket_count() {
         check_hazard_pointer();
         TableInfo *ti = snapshot_table_nolock();
@@ -184,29 +186,20 @@ public:
         return buckets;
     }
 
-    size_type max_bucket_count() const {
-        assert(false);
-        return 0;
-    }
-
+    /* load_factor returns the ratio of the number of items in the
+     * bucket to the total number of slots in the table. */
     float load_factor() {
         check_hazard_pointer();
         const TableInfo *ti = snapshot_table_nolock();
-        float lf = 1.0 * ti->hashitems_.load() / SLOT_PER_BUCKET / hashsize(ti->hashpower_);
+        float lf = 1.0 * size() / SLOT_PER_BUCKET / hashsize(ti->hashpower_);
         unset_hazard_pointer();
         return lf;
-    }
-
-    float max_load_factor() {
-        return 1.0;
     }
 
     /* find searches through the table for the given key, and stores
      * the associated value it finds. Since it takes bucket locks, it
      * contends with writes. */
     bool find(const key_type& key, mapped_type& val) {
-        if (size() == 0) return false;
-
         check_hazard_pointer();
         uint32_t hv = hashed_key(key);
         TableInfo *ti;
@@ -223,8 +216,6 @@ public:
     /* This is the same as find, except it returns the value it finds,
      * throwing an exception if the key isn't in the table. */
     value_type find(const key_type& key) {
-        if (size() == 0) throw std::out_of_range("hashtable is empty");
-
         mapped_type val;
         bool done = find(key, val);
 
@@ -323,24 +314,23 @@ public:
     void report() {
         check_hazard_pointer();
         TableInfo *ti = snapshot_table_nolock();
-        printf("total number of items %zu\n", ti->hashitems_.load());
+        const size_t s = size();
+        printf("total number of items %zu\n", s);
         printf("total size %zu Bytes, or %.2f MB\n",
                ti->tablesize_, (float) ti->tablesize_ / (1 << 20));
-        printf("load factor %.4f\n", load_factor());
+        printf("load factor %.4f\n", 1.0 * s / SLOT_PER_BUCKET / hashsize(ti->hashpower_));
         unset_hazard_pointer();
     }
 
 private:
     /* The Bucket type holds SLOT_PER_BUCKET keys and values, and a
-     * flag value, which indicates whether the slot at the given bit
-     * index is in the table or not. */
+     * occupied bitset, which indicates whether the slot at the given
+     * bit index is in the table or not. */
     typedef struct {
-        char        flag;
-        key_type    keys[SLOT_PER_BUCKET];
+        std::bitset<SLOT_PER_BUCKET> occupied;
+        key_type keys[SLOT_PER_BUCKET];
         mapped_type vals[SLOT_PER_BUCKET];
-        static_assert(sizeof(flag) * 8 >= SLOT_PER_BUCKET,
-                      "The flag does not have enough bits for the number of slots");
-    } __attribute__((__packed__)) Bucket;
+    } Bucket;
 
     /* TableInfo contains the entire state of the hashtable. We
      * allocate one TableInfo pointer per hash table and store all of
@@ -350,7 +340,6 @@ private:
         // size of the table in bytes
         size_t tablesize_;
 
-        // number of items inserted
         std::atomic<size_t> hashitems_;
 
         // 2**hashpower is the number of buckets
@@ -603,32 +592,6 @@ private:
         return (index ^ (tag * 0x5bd1e995)) & hashmask(ti->hashpower_);
     }
 
-    /* is_slot_empty returns whether the specified slot in the table
-     * is empty. */
-    static bool is_slot_empty(const TableInfo *ti, const size_t i,
-                              const size_t j) {
-        assert(i < hashsize(ti->hashpower_));
-        assert(j < SLOT_PER_BUCKET);
-        return get_bit(&(ti->buckets_[i].flag), j) == 0;
-    }
-
-    /* set_slot_used sets the specified slot in the table to full. */
-    static void set_slot_used(const TableInfo *ti, const size_t i,
-                              const size_t j) {
-        assert(i < hashsize(ti->hashpower_));
-        assert(j < SLOT_PER_BUCKET);
-        set_bit(&(ti->buckets_[i].flag), j, 1);
-    }
-
-    /* set_slot_empty sets the specified slot in the table to
-     * empty. */
-    static void set_slot_empty(const TableInfo *ti, const size_t i,
-                               const size_t j) {
-        assert(i < hashsize(ti->hashpower_));
-        assert(j < SLOT_PER_BUCKET);
-        set_bit(&(ti->buckets_[i].flag), j, 0);
-    }
-
     /* CuckooRecord holds one position in a cuckoo path. */
     typedef struct  {
         size_t   bucket;
@@ -718,7 +681,7 @@ private:
                 lock(ti, y.bucket);
                 for (int m = 0; m < SLOT_PER_BUCKET; m++) {
                     const size_t j = (start+m) % SLOT_PER_BUCKET;
-                    if (is_slot_empty(ti, y.bucket, j)) {
+                    if (!ti->buckets_[y.bucket].occupied.test(j)) {
                         y.pathcode = y.pathcode * SLOT_PER_BUCKET + j;
                         unlock(ti, y.bucket);
                         return y;
@@ -806,7 +769,7 @@ private:
             const size_t bucket = cuckoo_path[0].bucket;
             assert(bucket == i1 || bucket == i2);
             lock_two(ti, i1, i2);
-            if (is_slot_empty(ti, bucket, cuckoo_path[0].slot)) {
+            if (!ti->buckets_[bucket].occupied[cuckoo_path[0].slot]) {
                 return true;
             } else {
                 unlock_two(ti, i1, i2);
@@ -841,7 +804,8 @@ private:
              * in by another thread, or the slot we are moving from
              * may be empty, both of which invalidate the swap. */
             if (ti->buckets_[fb].keys[fs] != from->key ||
-                !is_slot_empty(ti, tb, ts) || is_slot_empty(ti, fb, fs)) {
+                ti->buckets_[tb].occupied[ts] ||
+                !ti->buckets_[fb].occupied[fs]) {
                 if (depth == 1) {
                     unlock_three(ti, fb, tb, ob);
                 } else {
@@ -852,9 +816,8 @@ private:
 
             ti->buckets_[tb].keys[ts] = ti->buckets_[fb].keys[fs];
             ti->buckets_[tb].vals[ts] = ti->buckets_[fb].vals[fs];
-            set_slot_used(ti, tb, ts);
-            set_slot_empty(ti, fb, fs);
-
+            ti->buckets_[tb].occupied.set(ts);
+            ti->buckets_[fb].occupied.reset(fs);
             if (depth == 1) {
                 // Don't unlock fb or ob, since they are needed in
                 // cuckoo_insert. Only unlock tb if it isn't equal to
@@ -927,7 +890,7 @@ private:
                 assert(insert_bucket == i1 || insert_bucket == i2);
                 assert(!ti->locks_[lock_ind(i1)].try_lock());
                 assert(!ti->locks_[lock_ind(i2)].try_lock());
-                assert(is_slot_empty(ti, insert_bucket, insert_slot));
+                assert(!ti->buckets_[insert_bucket].occupied[insert_slot]);
                 done = true;
                 break;
             }
@@ -954,7 +917,7 @@ private:
     static bool try_read_from_bucket(const TableInfo *ti, const key_type &key,
                                      mapped_type &val, const size_t i) {
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
-            if (is_slot_empty(ti, i, j)) {
+            if (!ti->buckets_[i].occupied[j]) {
                 continue;
             }
             if (key == ti->buckets_[i].keys[j]) {
@@ -970,14 +933,12 @@ private:
     static inline void add_to_bucket(TableInfo *ti, const key_type &key,
                                      const mapped_type &val, const size_t i,
                                      const size_t j) {
-        assert(is_slot_empty(ti, i, j));
+        assert(!ti->buckets_[i].occupied[j]);
         ti->buckets_[i].keys[j] = key;
         ti->buckets_[i].vals[j] = val;
-        set_slot_used(ti, i, j);
-        ti->hashitems_.fetch_add(1);
+        ti->buckets_[i].occupied.set(j);
+        ti->hashitems_++;
     }
-
-
 
     /* try_add_to_bucket will search the bucket for an empty slot and
      * place the given key-value pair into that slot. */
@@ -986,7 +947,7 @@ private:
                                   const mapped_type &val,
                                   const size_t i) {
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
-            if (is_slot_empty(ti, i, j)) {
+            if (!ti->buckets_[i].occupied[j]) {
                 add_to_bucket(ti, key, val, i, j);
                 return true;
             }
@@ -1001,12 +962,12 @@ private:
                                     const key_type &key,
                                     const size_t i) {
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
-            if (is_slot_empty(ti, i, j)) {
+            if (!ti->buckets_[i].occupied[j]) {
                 continue;
             }
             if (ti->buckets_[i].keys[j] == key) {
-                set_slot_empty(ti, i, j);
-                ti->hashitems_.fetch_sub(1);
+                ti->buckets_[i].occupied.reset(j);
+                ti->hashitems_--;
                 return true;
             }
         }
@@ -1022,7 +983,7 @@ private:
                                   const mapped_type &value,
                                   const size_t i) {
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
-            if (!is_slot_empty(ti, i, j) && ti->buckets_[i].keys[j] == key) {
+            if (!ti->buckets_[i].occupied[j] && ti->buckets_[i].keys[j] == key) {
                 ti->buckets_[i].vals[j] = value;
                 return true;
             }
@@ -1084,7 +1045,7 @@ private:
         } else if (st == ok) {
             assert(!ti->locks_[lock_ind(i1)].try_lock());
             assert(!ti->locks_[lock_ind(i2)].try_lock());
-            assert(is_slot_empty(ti, insert_bucket, insert_slot));
+            assert(!ti->buckets_[insert_bucket].occupied[insert_slot]);
             assert(insert_bucket == index_hash(ti, hv) || insert_bucket == alt_index(ti, hv, index_hash(ti, hv)));
             /* Since we unlocked the buckets during run_cuckoo,
              * another insert could have inserted the same key into
@@ -1100,8 +1061,8 @@ private:
         }
 
         assert(st == failure);
-        DBG("hash table is full (hashpower = %zu, hash_items = %zu, load factor = %.2f), need to increase hashpower\n",
-            ti->hashpower_, ti->hashitems_.load(), 1.0 * ti->hashitems_.load() / SLOT_PER_BUCKET / hashsize(ti->hashpower_));
+        // DBG("hash table is full (hashpower = %zu, hash_items = %zu, load factor = %.2f), need to increase hashpower\n",
+        //     ti->hashpower_, ti->hashitems_.load(), 1.0 * ti->hashitems_.load() / SLOT_PER_BUCKET / hashsize(ti->hashpower_));
         return failure_table_full;
     }
 
@@ -1153,6 +1114,7 @@ private:
             return failure;
         }
 
+        new_table_info->hashitems_ = 0;
         table_info.store(new_table_info);
         cuckoo_clear();
 
@@ -1168,9 +1130,8 @@ private:
         }
 
         for (size_t i = 0; i < hashsize(ti->hashpower_); i++) {
-            ti->buckets_[i].flag = 0;
+            ti->buckets_[i].occupied.reset();
         }
-        ti->hashitems_.store(0);
 
         unlock_all(ti);
         unset_hazard_pointer();
@@ -1182,7 +1143,7 @@ private:
     static void insert_into_table(cuckoohash_map<Key, T, Hash>& new_map, const TableInfo *old_ti, size_t i, size_t end) {
         for (;i < end; i++) {
             for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
-                if (!is_slot_empty(old_ti, i, j)) {
+                if (old_ti->buckets_[i].occupied[j]) {
                     new_map.insert(old_ti->buckets_[i].keys[j], old_ti->buckets_[i].vals[j]);
                 }
             }
@@ -1212,7 +1173,7 @@ private:
         }
         insertion_threads[threadnum-1] = std::thread(
             insert_into_table, std::ref(new_map),
-            ti, (threadnum-1)*buckets_per_thread, bucket_count());
+            ti, (threadnum-1)*buckets_per_thread, hashsize(ti->hashpower_));
         for (size_t i = 0; i < threadnum; i++) {
             insertion_threads[i].join();
         }
@@ -1353,7 +1314,7 @@ public:
         if (is_end()) {
             throw std::out_of_range(end_dereference);
         }
-        assert(!hm_->is_slot_empty(ti_, index_, slot_));
+        assert(ti_.buckets_[index_].occupied[slot_]);
         return {ti_->buckets_[index_].keys[slot_], ti_->buckets_[index_].vals[slot_]};
     }
 
@@ -1443,12 +1404,12 @@ protected:
     /* set_begin sets the given pair to the position of the first
      * element in the table. */
     void set_begin(size_t& index, size_t& slot) {
-        if (hm_->size() == 0) {
+        if (hm_->empty()) {
             set_end(index, slot);
         } else {
             index = slot = 0;
             // There must be a filled slot somewhere in the table
-            if (hm_->is_slot_empty(ti_, index, slot)) {
+            if (!ti_->buckets_[index].occupied[slot]) {
                 bool res = forward_filled_slot(index, slot);
                 assert(res);
             }
@@ -1498,7 +1459,7 @@ protected:
         if (!res) {
             return false;
         }
-        while (hm_->is_slot_empty(ti_, index, slot)) {
+        while (!ti_->buckets_[index].occupied[slot]) {
             res = forward_slot(index, slot);
             if (!res) {
                 return false;
@@ -1514,7 +1475,7 @@ protected:
         if (!res) {
             return false;
         }
-        while (hm_->is_slot_empty(ti_, index, slot)) {
+        while (!ti_->buckets_[index].occupied[slot]) {
             res = backward_slot(index, slot);
             if (!res) {
                 return false;
@@ -1570,7 +1531,7 @@ public:
         if (this->is_end()) {
             throw std::out_of_range(this->end_dereference);
         }
-        assert(!this->hm_->is_slot_empty(this->ti_, this->index_, this->slot_));
+        assert(this->ti_.buckets_[this->index_].occupied[this->slot_]);
         this->ti_->buckets_[this->index_].vals[this->slot_] = val;
     }
 };
