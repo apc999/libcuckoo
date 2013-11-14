@@ -5,7 +5,6 @@
 #include <stdexcept>
 #include <cstring>
 #include <cassert>
-#include <cstdint>
 #include <memory>
 #include <atomic>
 #include <thread>
@@ -18,6 +17,7 @@
 #include <bitset>
 #include <unistd.h>
 #include <sched.h>
+#include <stdint.h>
 
 #include "cuckoohash_config.h"
 #include "util.h"
@@ -161,14 +161,9 @@ public:
     size_type size() {
         check_hazard_pointer();
         const TableInfo *ti = snapshot_table_nolock();
-        size_t inserts = 0;
-        size_t deletes = 0;
-        for (size_t i = 0; i < ti->num_inserts.size(); i++) {
-            inserts += ti->num_inserts[i].num.load();
-            deletes += ti->num_deletes[i].num.load();
-        }
+        const size_t s = cuckoo_size(ti);
         unset_hazard_pointer();
-        return inserts - deletes;
+        return s;
     }
 
     /* empty returns true if the table is empty. */
@@ -200,7 +195,7 @@ public:
     float load_factor() {
         check_hazard_pointer();
         const TableInfo *ti = snapshot_table_nolock();
-        float lf = 1.0 * size() / SLOT_PER_BUCKET / hashsize(ti->hashpower_);
+        const float lf = cuckoo_loadfactor(ti);
         unset_hazard_pointer();
         return lf;
     }
@@ -245,23 +240,13 @@ public:
         TableInfo *ti;
         size_t i1, i2;
         snapshot_and_lock_two(hv, ti, i1, i2);
-
-        cuckoo_status st;
-        mapped_type oldval;
-        st = cuckoo_find(key, oldval, hv, ti, i1, i2);
-        if (ok == st) {
-            unlock_two(ti, i1, i2);
-            unset_hazard_pointer();
-            return false;
-        }
-
-        st = cuckoo_insert(key, val, hv, ti, i1, i2);
+        cuckoo_status st = cuckoo_insert(key, val, hv, ti, i1, i2);
         while (st != ok) {
             // If the insert failed with failure_key_duplicated, it
             // returns here
             if (st == failure_key_duplicated) {
                 unset_hazard_pointer();
-                return st;
+                return false;
             }
             // If it failed with failure_under_expansion, the insert
             // operated on an old version of the table, so we just try
@@ -272,7 +257,8 @@ public:
                     DBG("expansion is on-going\n", NULL);
                 }
             }
-            return insert(key, val);
+            snapshot_and_lock_two(hv, ti, i1, i2);
+            st = cuckoo_insert(key, val, hv, ti, i1, i2);
         }
         unset_hazard_pointer();
         return true;
@@ -323,7 +309,7 @@ public:
     void report() {
         check_hazard_pointer();
         TableInfo *ti = snapshot_table_nolock();
-        const size_t s = size();
+        const size_t s = cuckoo_size(ti);
         printf("total number of items %zu\n", s);
         printf("total size %zu Bytes, or %.2f MB\n",
                ti->tablesize_, (float) ti->tablesize_ / (1 << 20));
@@ -373,6 +359,19 @@ private:
         std::vector<bigint> num_deletes;
     };
     std::atomic<TableInfo*> table_info;
+
+    /* choose_counter is a platform specific way of choosing the
+     * correct counter to increment for a given thread. On Linux, we
+     * have sched_getcpu(), which returns the cpu core that the
+     * current thread is on, but there isn't a good alternative for
+     * Mac, so we just return 0. */
+    static inline size_t choose_counter() {
+#ifdef __linux__
+        return sched_getcpu();
+#else
+        return 0;
+#endif
+    }
 
     /* old_table_infos holds pointers to old TableInfos that were
      * replaced during expansion. This keeps the memory alive for any
@@ -631,9 +630,9 @@ private:
         // a compressed representation of the slots for each of the
         // buckets in the path.
         size_t pathcode;
-        static_assert(pow(SLOT_PER_BUCKET, MAX_BFS_DEPTH+1) <
-                      std::numeric_limits<decltype(pathcode)>::max(),
-                      "pathcode may not be large enough to encode a cuckoo path");
+        // static_assert(pow(SLOT_PER_BUCKET, MAX_BFS_DEPTH+1) <
+        //               std::numeric_limits<decltype(pathcode)>::max(),
+        //               "pathcode may not be large enough to encode a cuckoo path");
         // The 0-indexed position in the cuckoo path this slot
         // occupies
         int depth;
@@ -809,7 +808,7 @@ private:
             size_t tb = to->bucket;
             size_t ts = to->slot;
 
-            size_t ob;
+            size_t ob = 0;
             if (depth == 1) {
                 /* Even though we are only swapping out of i1 or i2,
                  * we have to lock both of them along with the slot we
@@ -961,7 +960,7 @@ private:
         ti->buckets_[i].keys[j] = key;
         ti->buckets_[i].vals[j] = val;
         ti->buckets_[i].occupied.set(j);
-        ti->num_inserts[sched_getcpu()].num++;
+        ti->num_inserts[choose_counter()].num++;
     }
 
     /* try_add_to_bucket will search the bucket for an empty slot and
@@ -991,7 +990,7 @@ private:
             }
             if (ti->buckets_[i].keys[j] == key) {
                 ti->buckets_[i].occupied.reset(j);
-                ti->num_deletes[sched_getcpu()].num++;
+                ti->num_deletes[choose_counter()].num++;
                 return true;
             }
         }
@@ -1022,7 +1021,6 @@ private:
                                      const TableInfo *ti,
                                      const size_t i1,
                                      const size_t i2) {
-
         if (try_read_from_bucket(ti, key, val, i1)) {
             return ok;
         }
@@ -1036,7 +1034,8 @@ private:
      * empty slot in i1 or i2, performing cuckoo hashing if necessary.
      * It expects the locks to be taken outside the function, but they
      * are released here, since different scenarios require different
-     * handling of the locks. cuckoo hashing presents multiple
+     * handling of the locks. Before inserting, it checks that the key
+     * isn't already in the table. cuckoo hashing presents multiple
      * concurrency issues, which are explained in the function. */
     cuckoo_status cuckoo_insert(const key_type &key,
                                 const mapped_type &val,
@@ -1044,6 +1043,12 @@ private:
                                 TableInfo *ti,
                                 const size_t i1,
                                 const size_t i2) {
+        mapped_type oldval;
+        if (cuckoo_find(key, oldval, hv, ti, i1, i2) == ok) {
+            unlock_two(ti, i1, i2);
+            return failure_key_duplicated;
+        }
+
         if (try_add_to_bucket(ti, key, val, i1)) {
             unlock_two(ti, i1, i2);
             return ok;
@@ -1073,7 +1078,6 @@ private:
              * another insert could have inserted the same key into
              * either i1 or i2, so we check for that before doing the
              * insert. */
-            mapped_type oldval;
             if (cuckoo_find(key, oldval, hv, ti, i1, i2) == ok) {
                 return failure_key_duplicated;
             }
@@ -1083,8 +1087,8 @@ private:
         }
 
         assert(st == failure);
-        // DBG("hash table is full (hashpower = %zu, hash_items = %zu, load factor = %.2f), need to increase hashpower\n",
-        //     ti->hashpower_, ti->hashitems_.load(), 1.0 * ti->hashitems_.load() / SLOT_PER_BUCKET / hashsize(ti->hashpower_));
+        DBG("hash table is full (hashpower = %zu, hash_items = %zu, load factor = %.2f), need to increase hashpower\n",
+            ti->hashpower_, cuckoo_size(ti), cuckoo_loadfactor(ti));
         return failure_table_full;
     }
 
@@ -1156,7 +1160,7 @@ private:
         for (size_t i = 0; i < hashsize(ti->hashpower_); i++) {
             ti->buckets_[i].occupied.reset();
         }
-       
+
         for (size_t i = 0; i < ti->num_inserts.size(); i++) {
             ti->num_inserts[i].num = 0;
             ti->num_deletes[i].num = 0;
@@ -1165,6 +1169,23 @@ private:
         unlock_all(ti);
         unset_hazard_pointer();
         return ok;
+    }
+
+    /* cuckoo_size returns the number of elements in the given
+     * table. */
+    size_t cuckoo_size(const TableInfo *ti) {
+        size_t inserts = 0;
+        size_t deletes = 0;
+        for (size_t i = 0; i < ti->num_inserts.size(); i++) {
+            inserts += ti->num_inserts[i].num.load();
+            deletes += ti->num_deletes[i].num.load();
+        }
+        return inserts-deletes;
+    }
+
+    /* cuckoo_loadfactor returns the load factor of the given table. */
+    float cuckoo_loadfactor(const TableInfo *ti) {
+        return 1.0 * cuckoo_size(ti) / SLOT_PER_BUCKET / hashsize(ti->hashpower_);
     }
 
     /* insert_into_table is a helper function used by
@@ -1247,7 +1268,9 @@ typename cuckoohash_map<Key, T, Hash>::GlobalHazardPointerList
 cuckoohash_map<Key, T, Hash>::global_hazard_pointers;
 
 template <class Key, class T, class Hash>
-const size_t cuckoohash_map<Key, T, Hash>::kNumCores = sysconf(_SC_NPROCESSORS_ONLN);
+const size_t cuckoohash_map<Key, T, Hash>::kNumCores =
+    std::thread::hardware_concurrency() == 0 ?
+    sysconf(_SC_NPROCESSORS_ONLN) : std::thread::hardware_concurrency();
 
 /* An iterator through the table that is thread safe. For the duration
  * of its existence, it takes all the locks on the table it is given,
@@ -1382,8 +1405,7 @@ public:
         if (is_begin()) {
             throw std::out_of_range(begin_decrement);
         }
-        bool res = backward_filled_slot(index_, slot_);
-        assert(res);
+        backward_filled_slot(index_, slot_);
         return this;
     }
 
@@ -1393,8 +1415,7 @@ public:
         if (is_begin()) {
             throw std::out_of_range(begin_decrement);
         }
-        bool res = backward_filled_slot(index_, slot_);
-        assert(res);
+        backward_filled_slot(index_, slot_);
         return this;
     }
 
@@ -1442,8 +1463,8 @@ protected:
             index = slot = 0;
             // There must be a filled slot somewhere in the table
             if (!ti_->buckets_[index].occupied[slot]) {
-                bool res = forward_filled_slot(index, slot);
-                assert(res);
+                forward_filled_slot(index, slot);
+                assert(!is_end());
             }
         }
     }
@@ -1526,10 +1547,18 @@ protected:
     }
 
     // Other error messages
-    static constexpr const char* end_dereference = "Cannot dereference: iterator points past the end of the table";
-    static constexpr const char* end_increment = "Cannot increment: iterator points past the end of the table";
-    static constexpr const char* begin_decrement = "Cannot decrement: iterator points to the beginning of the table";
+    static const char* end_dereference;
+    static const char* end_increment;
+    static const char* begin_decrement;
 };
+
+// Defining static members
+template <class K, class V, class H>
+const char* c_iterator<K, V, H>::end_dereference = "Cannot dereference: iterator points past the end of the table";
+template <class K, class V, class H>
+const char* c_iterator<K, V, H>::end_increment = "Cannot increment: iterator points past the end of the table";
+template <class K, class V, class H>
+const char* c_iterator<K, V, H>::begin_decrement = "Cannot decrement: iterator points to the beginning of the table";
 
 /* A mut_iterator is just a c_iterator with an update method. */
 template <class K, class V, class H>

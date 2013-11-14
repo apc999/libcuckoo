@@ -12,7 +12,7 @@
 
 #include "cuckoohash_map.hh"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
-#include "gtest/gtest.h"
+#include "test_util.cc"
 
 typedef uint32_t KeyType;
 typedef uint32_t ValType;
@@ -21,12 +21,9 @@ typedef cuckoohash_map<KeyType, ValType> Table;
 const size_t power = 1;
 const size_t size = (1L << power) * SLOT_PER_BUCKET;
 
-// Global set up and tear down
-class IteratorEnvironment : public ::testing::Environment {
+class IteratorEnvironment {
 public:
-    IteratorEnvironment(): emptytable(power), table(power), items_end(items+size) {}
-
-    void SetUp() {
+    IteratorEnvironment(): emptytable(power), table(power), items_end(items+size) {
         // Fills up table and items with random values
         uint64_t seed = std::chrono::system_clock::now().time_since_epoch().count();
         std::cout << "seed = " << seed << std::endl;
@@ -38,7 +35,7 @@ public:
             EXPECT_TRUE(table.insert(items[i].first, items[i].second));
         }
     }
-        
+
     Table emptytable;
     Table table;
     std::pair<KeyType, ValType> items[size];
@@ -47,7 +44,7 @@ public:
 
 IteratorEnvironment* iter_env;
 
-TEST(EmptyTable, BeginEndIterator) {
+void EmptyTableBeginEndIterator() {
     Table emptytable(power);
     Table::const_iterator t = iter_env->emptytable.cbegin();
     ASSERT_TRUE(t.is_begin() && t.is_end());
@@ -58,7 +55,7 @@ TEST(EmptyTable, BeginEndIterator) {
 
 bool check_table_snapshot() {
     Table::value_type *snapshot_items = iter_env->table.snapshot_table();
-    for (int i = 0; i < iter_env->table.size(); i++) {
+    for (size_t i = 0; i < iter_env->table.size(); i++) {
         if (std::find(iter_env->items, iter_env->items_end, snapshot_items[i]) == iter_env->items_end) {
             return false;
         }
@@ -67,7 +64,7 @@ bool check_table_snapshot() {
     return true;
 }
 
-TEST(FilledTable, IterForwards) {
+void FilledTableIterForwards() {
     Table::const_iterator t = iter_env->table.cbegin();
     bool visited[size] = {};
     while (!t.is_end()) {
@@ -84,7 +81,7 @@ TEST(FilledTable, IterForwards) {
     EXPECT_TRUE(check_table_snapshot());
 }
 
-TEST(FilledTable, IterBackwards) {
+void FilledTableIterBackwards() {
     Table::const_iterator t = iter_env->table.cend();
     bool visited[size] = {};
     do {
@@ -101,7 +98,7 @@ TEST(FilledTable, IterBackwards) {
     EXPECT_TRUE(check_table_snapshot());
 }
 
-TEST(FilledTable, IncrementItems) {
+void FilledTableIncrementItems() {
     for (size_t i = 0; i < size; i++) {
         iter_env->items[i].second++;
     }
@@ -117,7 +114,13 @@ TEST(FilledTable, IncrementItems) {
 }
 
 int main(int argc, char** argv) {
-    iter_env = (IteratorEnvironment*)::testing::AddGlobalTestEnvironment(new IteratorEnvironment);
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+    iter_env = new IteratorEnvironment;
+    std::cout << "Running EmptyTableBeginEndIterator" << std::endl;
+    EmptyTableBeginEndIterator();
+    std::cout << "Running FilledTableIterBackwards" << std::endl;
+    FilledTableIterBackwards();
+    std::cout << "Running FilledTableIterForwards" << std::endl;
+    FilledTableIterForwards();
+    std::cout << "Running FilledTableIncrementItems" << std::endl;
+    FilledTableIncrementItems();
 }

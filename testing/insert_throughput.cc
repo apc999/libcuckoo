@@ -16,13 +16,13 @@
 #include <vector>
 #include <atomic>
 #include <thread>
+#include <stdint.h>
 #include <unistd.h>
 #include <sys/time.h>
 
-#include "commandline_parser.cc"
 #include "cuckoohash_map.hh"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
-#include "gtest/gtest.h"
+#include "test_util.cc"
 
 typedef uint32_t KeyType;
 typedef uint32_t ValType;
@@ -56,14 +56,12 @@ void insert_thread(cuckoohash_map<KeyType, ValType>& table, std::vector<KeyType>
     }
 }
 
-class InsertEnvironment : public ::testing::Environment {
+class InsertEnvironment {
 public:
     // We allocate the vectors with the total amount of space in the
     // table, which is bucket_count() * SLOT_PER_BUCKET
     InsertEnvironment()
-        : table(power), numkeys(table.bucket_count()*SLOT_PER_BUCKET), keys(numkeys) {}
-
-    virtual void SetUp() {
+        : table(power), numkeys(table.bucket_count()*SLOT_PER_BUCKET), keys(numkeys) {
         // Sets up the random number generator
         if (seed == 0) {
             seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -106,7 +104,7 @@ public:
 
 InsertEnvironment* env;
 
-TEST(InsertThroughputTest, Everything) {
+void InsertThroughputTest() {
     std::vector<std::thread> threads;
     size_t keys_per_thread = env->numkeys * ((end_load-begin_load) / 100.0) / thread_num;
     timeval t1, t2;
@@ -147,7 +145,6 @@ int main(int argc, char** argv) {
         exit(1);
     }
 
-    env = (InsertEnvironment*) ::testing::AddGlobalTestEnvironment(new InsertEnvironment);
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+    env = new InsertEnvironment;
+    InsertThroughputTest();
 }

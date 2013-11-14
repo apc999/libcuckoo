@@ -12,7 +12,7 @@
 
 #include "cuckoohash_map.hh"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
-#include "gtest/gtest.h"
+#include "test_util.cc"
 
 typedef uint32_t KeyType;
 typedef uint32_t ValType;
@@ -21,13 +21,9 @@ typedef std::pair<KeyType, ValType> KVPair;
 const size_t power = 19;
 const size_t numkeys = (1 << power) * SLOT_PER_BUCKET;
 
-class InsertFindTest : public ::testing::Test {
-protected:
-    
-    InsertFindTest()
-        : smalltable(power), bigtable(power + 1) {}
-
-    virtual void SetUp() {
+class InsertFindEnvironment {
+public:
+    InsertFindEnvironment() : smalltable(power), bigtable(power + 1) {
         // Sets up the random number generator
         uint64_t seed = std::chrono::system_clock::now().time_since_epoch().count();
         std::cout << "seed = " << seed << std::endl;
@@ -59,26 +55,36 @@ protected:
     KeyType nonkeys[numkeys];
 };
 
+InsertFindEnvironment* env;
+
 // Makes sure that we can find all the keys with their matching values
 // in the small and big tables
-TEST_F(InsertFindTest, FindKeysInTables) {
-    ASSERT_EQ(smalltable.size(), numkeys);
-    ASSERT_EQ(bigtable.size(), numkeys);
+void FindKeysInTables() {
+    ASSERT_EQ(env->smalltable.size(), numkeys);
+    ASSERT_EQ(env->bigtable.size(), numkeys);
 
     ValType retval;
     for (size_t i = 0; i < numkeys; i++) {
-        EXPECT_TRUE(smalltable.find(keys[i], retval));
-        EXPECT_EQ(retval, vals[i]);
-        EXPECT_TRUE(bigtable.find(keys[i], retval));
-        EXPECT_EQ(retval, vals[i]);
+        EXPECT_TRUE(env->smalltable.find(env->keys[i], retval));
+        EXPECT_EQ(retval, env->vals[i]);
+        EXPECT_TRUE(env->bigtable.find(env->keys[i], retval));
+        EXPECT_EQ(retval, env->vals[i]);
     }
 }
 
 // Makes sure than none of the nonkeys are in either table
-TEST_F(InsertFindTest, FindNonkeysInTables) {
+void FindNonkeysInTables() {
     ValType retval;
     for (size_t i = 0; i < numkeys; i++) {
-        EXPECT_FALSE(smalltable.find(nonkeys[i], retval));
-        EXPECT_FALSE(bigtable.find(nonkeys[i], retval));
+        EXPECT_FALSE(env->smalltable.find(env->nonkeys[i], retval));
+        EXPECT_FALSE(env->bigtable.find(env->nonkeys[i], retval));
     }
+}
+
+int main(int argc, char **argv) {
+    env = new InsertFindEnvironment;
+    std::cout << "Running FindKeysInTables" << std::endl;
+    FindKeysInTables();
+    std::cout << "Running FindNonkeysInTables" << std::endl;
+    FindNonkeysInTables();
 }

@@ -17,11 +17,11 @@
 #include <vector>
 #include <atomic>
 #include <thread>
+#include <stdint.h>
 
-#include "commandline_parser.cc"
 #include "cuckoohash_map.hh"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
-#include "gtest/gtest.h"
+#include "test_util.cc"
 
 typedef uint32_t KeyType;
 typedef uint32_t ValType;
@@ -65,16 +65,13 @@ std::atomic<size_t> num_deletes = ATOMIC_VAR_INIT(0);
 std::atomic<size_t> num_updates = ATOMIC_VAR_INIT(0);
 std::atomic<size_t> num_finds = ATOMIC_VAR_INIT(0);
 
-class AllEnvironment : public ::testing::Environment {
+class AllEnvironment {
 public:
     AllEnvironment()
         : table(power), table2(power), keys(numkeys), vals(numkeys), vals2(numkeys), in_table(new bool[numkeys]), in_use(numkeys),
           val_dist(std::numeric_limits<ValType>::min(), std::numeric_limits<ValType>::max()),
           val_dist2(std::numeric_limits<ValType2>::min(), std::numeric_limits<ValType2>::max()),
-          ind_dist(0, numkeys-1)
-        {}
-
-    virtual void SetUp() {
+          ind_dist(0, numkeys-1) {
         // Sets up the random number generator
         if (seed == 0) {
             seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -90,7 +87,7 @@ public:
             in_use[i].clear();
         }
     }
-
+        
     cuckoohash_map<KeyType, ValType> table;
     cuckoohash_map<KeyType, ValType2> table2;
     std::vector<KeyType> keys;
@@ -126,8 +123,8 @@ void insert_thread() {
             EXPECT_NE(res, env->in_table[ind]);
             EXPECT_NE(res2, env->in_table[ind]);
             if (res) {
-                ValType find_v;
-                ValType2 find_v2;
+                ValType find_v = 0;
+                ValType2 find_v2 = 0;
                 EXPECT_TRUE(env->table.find(k, find_v));
                 EXPECT_EQ(v, find_v);
                 EXPECT_TRUE(env->table2.find(k, find_v2));
@@ -157,8 +154,8 @@ void delete_thread() {
             EXPECT_EQ(res, env->in_table[ind]);
             EXPECT_EQ(res2, env->in_table[ind]);
             if (res) {
-                ValType find_v;
-                ValType2 find_v2;
+                ValType find_v = 0;
+                ValType2 find_v2 = 0;
                 EXPECT_FALSE(env->table.find(k, find_v));
                 EXPECT_FALSE(env->table2.find(k, find_v2));
                 env->in_table[ind] = false;
@@ -186,8 +183,8 @@ void update_thread() {
             EXPECT_EQ(res, env->in_table[ind]);
             EXPECT_EQ(res2, env->in_table[ind]);
             if (res) {
-                ValType find_v;
-                ValType2 find_v2;
+                ValType find_v = 0;
+                ValType2 find_v2 = 0;
                 EXPECT_TRUE(env->table.find(k, find_v));
                 EXPECT_EQ(v, find_v);
                 EXPECT_TRUE(env->table2.find(k, find_v2));
@@ -208,11 +205,10 @@ void find_thread() {
         // Run finds on a random key and check that the presence of
         // the keys matches in_table
         size_t ind = env->ind_dist(gen);
-        bool expected = false;
         if (!env->in_use[ind].test_and_set()) {
             KeyType k = ind;
-            ValType v;
-            ValType2 v2;
+            ValType v = 0;
+            ValType2 v2 = 0;
             bool res = env->table.find(k, v);
             bool res2 = env->table2.find(k, v2);
             EXPECT_EQ(env->in_table[ind], res);
@@ -228,7 +224,7 @@ void find_thread() {
 }
 
 // Spawns thread_num insert, delete, update, and find threads
-TEST(AllTest, Everything) {
+void StressTest() {
     std::vector<std::thread> threads;
     for (size_t i = 0; i < thread_num; i++) {
         if (!disable_inserts) {
@@ -282,7 +278,6 @@ int main(int argc, char** argv) {
                                "If set, no finds will be run"};
     parse_flags(argc, argv, args, arg_vars, arg_help, sizeof(args)/sizeof(const char*), flags, flag_vars, flag_help, sizeof(flags)/sizeof(const char*));
 
-    env = (AllEnvironment*) ::testing::AddGlobalTestEnvironment(new AllEnvironment);
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+    env = new AllEnvironment;
+    StressTest();
 }

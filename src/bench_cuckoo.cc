@@ -15,6 +15,7 @@
 #include <ctime>
 #include <sys/time.h>
 #include <algorithm>
+#include <random>
 
 #include "cuckoohash_map.hh"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
