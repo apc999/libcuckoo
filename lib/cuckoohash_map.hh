@@ -126,6 +126,22 @@ class cuckoohash_map {
         *hazard_pointer = nullptr;
     }
 
+    /* counterid stores the per-thread counter of each thread. */
+    static __thread int counterid;
+
+    /* check_counterid checks if the counterid has already been
+     * determined (only if it's not a linux system). If not, it
+     * assigns a counterid to the current thread. It picks a random
+     * core. This should be called at the beginning of any function
+     * that changes the number of elements in the table. */
+    static inline void check_counterid() {
+#ifndef __linux__
+        if (counterid < 0) {
+            counterid = cheap_rand() % kNumCores;
+        }
+#endif
+    }
+
 public:
     typedef Key               key_type;
     typedef std::pair<Key, T> value_type;
@@ -236,6 +252,7 @@ public:
      * insert will automatically expand until it can succeed. */
     bool insert(const key_type& key, const mapped_type& val) {
         check_hazard_pointer();
+        check_counterid();
         uint32_t hv = hashed_key(key);
         TableInfo *ti;
         size_t i1, i2;
@@ -268,6 +285,7 @@ public:
      * there, it returns false. */
     bool erase(const key_type& key) {
         check_hazard_pointer();
+        check_counterid();
         uint32_t hv = hashed_key(key);
         TableInfo *ti;
         size_t i1, i2;
@@ -327,7 +345,7 @@ private:
         mapped_type vals[SLOT_PER_BUCKET];
     } Bucket;
 
-    /* bigint is a cache-aligned atomic size_t type. */
+    /* bigint is a cache-aligned atomic integer type. */
     struct bigint {
         std::atomic<size_t> num;
         bigint() {}
@@ -353,9 +371,8 @@ private:
         // unique pointer to the array of mutexes
         std::unique_ptr<std::mutex[]> locks_;
 
-        // per-core counters for the number of inserts
+        // per-core counters for the number of inserts and deletes
         std::vector<bigint> num_inserts;
-        // per-core counters for the number of deletes
         std::vector<bigint> num_deletes;
     };
     std::atomic<TableInfo*> table_info;
@@ -364,12 +381,13 @@ private:
      * correct counter to increment for a given thread. On Linux, we
      * have sched_getcpu(), which returns the cpu core that the
      * current thread is on, but there isn't a good alternative for
-     * Mac, so we just return 0. */
+     * other OSes, so we return the thread-specific counterid, which
+     * seems to perform just as well as sched_getcpu(). */
     static inline size_t choose_counter() {
 #ifdef __linux__
         return sched_getcpu();
 #else
-        return 0;
+        return counterid;
 #endif
     }
 
@@ -960,7 +978,7 @@ private:
         ti->buckets_[i].keys[j] = key;
         ti->buckets_[i].vals[j] = val;
         ti->buckets_[i].occupied.set(j);
-        ti->num_inserts[choose_counter()].num++;
+        ti->num_inserts[choose_counter()].num.fetch_add(1);
     }
 
     /* try_add_to_bucket will search the bucket for an empty slot and
@@ -990,7 +1008,7 @@ private:
             }
             if (ti->buckets_[i].keys[j] == key) {
                 ti->buckets_[i].occupied.reset(j);
-                ti->num_deletes[choose_counter()].num++;
+                ti->num_deletes[choose_counter()].num.fetch_add(1);
                 return true;
             }
         }
@@ -1162,8 +1180,8 @@ private:
         }
 
         for (size_t i = 0; i < ti->num_inserts.size(); i++) {
-            ti->num_inserts[i].num = 0;
-            ti->num_deletes[i].num = 0;
+            ti->num_inserts[i].num.store(0);
+            ti->num_deletes[i].num.store(0);
         }
 
         unlock_all(ti);
@@ -1262,6 +1280,9 @@ public:
 // Initializing the static members
 template <class Key, class T, class Hash>
 __thread void** cuckoohash_map<Key, T, Hash>::hazard_pointer = nullptr;
+
+template <class Key, class T, class Hash>
+__thread int cuckoohash_map<Key, T, Hash>::counterid = -1;
 
 template <class Key, class T, class Hash>
 typename cuckoohash_map<Key, T, Hash>::GlobalHazardPointerList
