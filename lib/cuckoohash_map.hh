@@ -25,6 +25,17 @@ extern "C" {
 #include "city.h"
 }
 
+class spinlock {
+    std::atomic_flag lock_ = ATOMIC_FLAG_INIT;
+public:
+    inline void lock() {
+        while (lock_.test_and_set(std::memory_order_acquire));
+    }
+    inline void unlock() {
+        lock_.clear(std::memory_order_release);
+    }
+} __attribute__((aligned(64)));
+
 /* We forward-declare the iterator types, since they are needed in the
  * map. */
 template <class K, class V, class H> class c_iterator;
@@ -126,20 +137,19 @@ class cuckoohash_map {
         *hazard_pointer = nullptr;
     }
 
-    /* counterid stores the per-thread counter of each thread. */
+    /* counterid stores the per-thread counter index of each
+     * thread. */
     static __thread int counterid;
 
     /* check_counterid checks if the counterid has already been
-     * determined (only if it's not a linux system). If not, it
-     * assigns a counterid to the current thread. It picks a random
-     * core. This should be called at the beginning of any function
-     * that changes the number of elements in the table. */
+     * determined. If not, it assigns a counterid to the current
+     * thread by picking a random core. This should be called at the
+     * beginning of any function that changes the number of elements
+     * in the table. */
     static inline void check_counterid() {
-#ifndef __linux__
         if (counterid < 0) {
             counterid = cheap_rand() % kNumCores;
         }
-#endif
     }
 
 public:
@@ -354,6 +364,9 @@ private:
         }
     } __attribute__((aligned(64)));
 
+    // An alias for the type of lock we are using
+    typedef spinlock locktype;
+
     /* TableInfo contains the entire state of the hashtable. We
      * allocate one TableInfo pointer per hash table and store all of
      * the table memory in it, so that all the data can be atomically
@@ -369,27 +382,13 @@ private:
         std::unique_ptr<Bucket[]> buckets_;
 
         // unique pointer to the array of mutexes
-        std::unique_ptr<std::mutex[]> locks_;
+        std::unique_ptr<locktype[]> locks_;
 
         // per-core counters for the number of inserts and deletes
         std::vector<bigint> num_inserts;
         std::vector<bigint> num_deletes;
     };
     std::atomic<TableInfo*> table_info;
-
-    /* choose_counter is a platform specific way of choosing the
-     * correct counter to increment for a given thread. On Linux, we
-     * have sched_getcpu(), which returns the cpu core that the
-     * current thread is on, but there isn't a good alternative for
-     * other OSes, so we return the thread-specific counterid, which
-     * seems to perform just as well as sched_getcpu(). */
-    static inline size_t choose_counter() {
-#ifdef __linux__
-        return sched_getcpu();
-#else
-        return counterid;
-#endif
-    }
 
     /* old_table_infos holds pointers to old TableInfos that were
      * replaced during expansion. This keeps the memory alive for any
@@ -884,16 +883,8 @@ private:
      * freed up is still locked. Otherwise it is unlocked. */
     cuckoo_status run_cuckoo(TableInfo *ti, const size_t i1, const size_t i2,
                              size_t &insert_bucket, size_t &insert_slot) {
-#ifdef __linux__
-        static __thread CuckooRecord* cuckoo_path = NULL;
-#else
-        // "__thread" is not supported by default on MacOS, so we
-        // malloc and free cuckoo_path on every call.
-        CuckooRecord* cuckoo_path = NULL;
-#endif
-        if (!cuckoo_path) {
-            cuckoo_path = new CuckooRecord[MAX_BFS_DEPTH+1];
-        }
+
+        CuckooRecord cuckoo_path[MAX_BFS_DEPTH+1];
 
         // We must unlock i1 and i2 here, so that cuckoopath_search
         // and cuckoopath_move can lock buckets as desired without
@@ -937,9 +928,6 @@ private:
             }
         }
 
-#ifndef __linux__
-        delete [] cuckoo_path;
-#endif
         if (!done) {
             return failure;
         } else if (ti != table_info.load()) {
@@ -978,7 +966,7 @@ private:
         ti->buckets_[i].keys[j] = key;
         ti->buckets_[i].vals[j] = val;
         ti->buckets_[i].occupied.set(j);
-        ti->num_inserts[choose_counter()].num.fetch_add(1);
+        ti->num_inserts[counterid].num.fetch_add(1);
     }
 
     /* try_add_to_bucket will search the bucket for an empty slot and
@@ -1008,7 +996,7 @@ private:
             }
             if (ti->buckets_[i].keys[j] == key) {
                 ti->buckets_[i].occupied.reset(j);
-                ti->num_deletes[choose_counter()].num.fetch_add(1);
+                ti->num_deletes[counterid].num.fetch_add(1);
                 return true;
             }
         }
@@ -1153,7 +1141,7 @@ private:
             new_table_info->hashpower_ = (hashtable_init > 0) ? hashtable_init : HASHPOWER_DEFAULT;
             new_table_info->tablesize_ = sizeof(Bucket) * hashsize(new_table_info->hashpower_);
             new_table_info->buckets_.reset(new Bucket[hashsize(new_table_info->hashpower_)]);
-            new_table_info->locks_.reset(new std::mutex[kNumLocks]);
+            new_table_info->locks_.reset(new locktype[kNumLocks]);
             new_table_info->num_inserts.resize(kNumCores);
             new_table_info->num_deletes.resize(kNumCores);
         } catch (std::bad_alloc&) {
