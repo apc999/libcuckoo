@@ -26,8 +26,8 @@ config.h.in~
 config.sub
 lib/.deps/
 lib/.libs/
-lib/*.lo
-lib/*.la
+lib/*.o
+lib/*.a
 libtool
 ltmain.sh
 m4/libtool.m4

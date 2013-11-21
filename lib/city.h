@@ -38,12 +38,16 @@
 // nearest competitor is Bob Jenkins' Spooky.  We don't have great data for
 // other 64-bit CPUs, but for long strings we know that Spooky is slightly
 // faster than CityHash on some relatively recent AMD x86-64 CPUs, for example.
+// Note that CityHashCrc128 is declared in citycrc.h.
 //
 // For 32-bit x86 code, we don't know of anything faster than CityHash32 that
 // is of comparable quality.  We believe our nearest competitor is Murmur3A.
 // (On 64-bit CPUs, it is typically faster to use the other CityHash variants.)
 //
 // Functions in the CityHash family are not suitable for cryptography.
+//
+// Please see CityHash's README file for more details on our performance
+// measurements and so on.
 //
 // WARNING: This code has been only lightly tested on big-endian platforms!
 // It is known to work well on little-endian platforms that have a small penalty
@@ -60,49 +64,49 @@
 
 #include <stdlib.h>  // for size_t.
 #include <stdint.h>
-//#include <utility>
+#include <utility>
 
 typedef uint8_t uint8;
 typedef uint32_t uint32;
 typedef uint64_t uint64;
-//typedef std::pair<uint64, uint64> uint128;
+typedef std::pair<uint64, uint64> uint128;
 
-/* inline uint64 Uint128Low64(const uint128& x) { return x.first; } */
-/* inline uint64 Uint128High64(const uint128& x) { return x.second; } */
+inline uint64 Uint128Low64(const uint128& x) { return x.first; }
+inline uint64 Uint128High64(const uint128& x) { return x.second; }
 
 // Hash function for a byte array.
-/* uint64 CityHash64(const char *buf, size_t len); */
+uint64 CityHash64(const char *buf, size_t len);
 
-/* // Hash function for a byte array.  For convenience, a 64-bit seed is also */
-/* // hashed into the result. */
-/* uint64 CityHash64WithSeed(const char *buf, size_t len, uint64 seed); */
+// Hash function for a byte array.  For convenience, a 64-bit seed is also
+// hashed into the result.
+uint64 CityHash64WithSeed(const char *buf, size_t len, uint64 seed);
 
-/* // Hash function for a byte array.  For convenience, two seeds are also */
-/* // hashed into the result. */
-/* uint64 CityHash64WithSeeds(const char *buf, size_t len, */
-/*                            uint64 seed0, uint64 seed1); */
+// Hash function for a byte array.  For convenience, two seeds are also
+// hashed into the result.
+uint64 CityHash64WithSeeds(const char *buf, size_t len,
+                           uint64 seed0, uint64 seed1);
 
-/* // Hash function for a byte array. */
-/* uint128 CityHash128(const char *s, size_t len); */
+// Hash function for a byte array.
+uint128 CityHash128(const char *s, size_t len);
 
-/* // Hash function for a byte array.  For convenience, a 128-bit seed is also */
-/* // hashed into the result. */
-/* uint128 CityHash128WithSeed(const char *s, size_t len, uint128 seed); */
+// Hash function for a byte array.  For convenience, a 128-bit seed is also
+// hashed into the result.
+uint128 CityHash128WithSeed(const char *s, size_t len, uint128 seed);
 
 // Hash function for a byte array.  Most useful in 32-bit binaries.
 uint32 CityHash32(const char *buf, size_t len);
 
 // Hash 128 input bits down to 64 bits of output.
 // This is intended to be a reasonably good hash function.
-/* inline uint64 Hash128to64(const uint128& x) { */
-/*   // Murmur-inspired hashing. */
-/*   const uint64 kMul = 0x9ddfea08eb382d69ULL; */
-/*   uint64 a = (Uint128Low64(x) ^ Uint128High64(x)) * kMul; */
-/*   a ^= (a >> 47); */
-/*   uint64 b = (Uint128High64(x) ^ a) * kMul; */
-/*   b ^= (b >> 47); */
-/*   b *= kMul; */
-/*   return b; */
-/* } */
+inline uint64 Hash128to64(const uint128& x) {
+  // Murmur-inspired hashing.
+  const uint64 kMul = 0x9ddfea08eb382d69ULL;
+  uint64 a = (Uint128Low64(x) ^ Uint128High64(x)) * kMul;
+  a ^= (a >> 47);
+  uint64 b = (Uint128High64(x) ^ a) * kMul;
+  b ^= (b >> 47);
+  b *= kMul;
+  return b;
+}
 
 #endif  // CITY_HASH_H_

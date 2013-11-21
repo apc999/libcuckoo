@@ -1,5 +1,5 @@
-testLDFLAGS = -lpthread -L$(top_srcdir)/lib -lcuckoo
-testDEPS = $(top_srcdir)/lib/libcuckoo.la
+testLDFLAGS = -lpthread -L$(top_srcdir)/lib -lcityhash
+testDEPS = $(top_srcdir)/lib/libcityhash.a
 
 noinst_PROGRAMS = test_insert_and_find.out test_iterator.out stress_all.out insert_throughput.out
 

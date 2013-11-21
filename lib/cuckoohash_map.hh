@@ -21,9 +21,7 @@
 
 #include "cuckoohash_config.h"
 #include "util.h"
-extern "C" {
 #include "city.h"
-}
 
 class spinlock {
     std::atomic_flag lock_;
@@ -234,7 +232,7 @@ public:
      * contends with writes. */
     bool find(const key_type& key, mapped_type& val) {
         check_hazard_pointer();
-        uint32_t hv = hashed_key(key);
+        uint64_t hv = hashed_key(key);
         TableInfo *ti;
         size_t i1, i2;
         snapshot_and_lock_two(hv, ti, i1, i2);
@@ -266,7 +264,7 @@ public:
     bool insert(const key_type& key, const mapped_type& val) {
         check_hazard_pointer();
         check_counterid();
-        uint32_t hv = hashed_key(key);
+        uint64_t hv = hashed_key(key);
         TableInfo *ti;
         size_t i1, i2;
         snapshot_and_lock_two(hv, ti, i1, i2);
@@ -299,7 +297,7 @@ public:
     bool erase(const key_type& key) {
         check_hazard_pointer();
         check_counterid();
-        uint32_t hv = hashed_key(key);
+        uint64_t hv = hashed_key(key);
         TableInfo *ti;
         size_t i1, i2;
         snapshot_and_lock_two(hv, ti, i1, i2);
@@ -315,7 +313,7 @@ public:
      * there, it returns false. */
     bool update(const key_type& key, const mapped_type& val) {
         check_hazard_pointer();
-        uint32_t hv = hashed_key(key);
+        uint64_t hv = hashed_key(key);
         TableInfo *ti;
         size_t i1, i2;
         snapshot_and_lock_two(hv, ti, i1, i2);
@@ -358,11 +356,11 @@ private:
         mapped_type vals[SLOT_PER_BUCKET];
     } Bucket;
 
-    /* bigint is a cache-aligned atomic integer type. */
-    struct bigint {
+    /* cacheint is a cache-aligned atomic integer type. */
+    struct cacheint {
         std::atomic<size_t> num;
-        bigint() {}
-        bigint(bigint&& x) {
+        cacheint() {}
+        cacheint(cacheint&& x) {
             num.store(x.num.load());
         }
     } __attribute__((aligned(64)));
@@ -388,8 +386,8 @@ private:
         std::unique_ptr<locktype[]> locks_;
 
         // per-core counters for the number of inserts and deletes
-        std::vector<bigint> num_inserts;
-        std::vector<bigint> num_deletes;
+        std::vector<cacheint> num_inserts;
+        std::vector<cacheint> num_deletes;
     };
     std::atomic<TableInfo*> table_info;
 
@@ -529,7 +527,7 @@ private:
      * Since the positions of the bucket locks depends on the number
      * of buckets in the table, the table_info pointer needs to be
      * grabbed first. */
-    inline void snapshot_and_lock_two(const uint32_t hv, TableInfo*& ti,
+    inline void snapshot_and_lock_two(const uint64_t hv, TableInfo*& ti,
                                       size_t& i1, size_t& i2) {
     TryAcquire:
         ti = table_info.load();
@@ -609,14 +607,14 @@ private:
     }
 
     /* hashed_key hashes the given key. */
-    static inline uint32_t hashed_key(const key_type &key) {
+    static inline uint64_t hashed_key(const key_type &key) {
         // return hasher()(key);
-        return CityHash32((const char*) &key, kKeySize);
+        return CityHash64((const char*) &key, kKeySize);
     }
 
     /* index_hash returns the first possible bucket that the given
      * hashed key could be. */
-    static inline size_t index_hash(const TableInfo *ti, const uint32_t hv) {
+    static inline size_t index_hash(const TableInfo *ti, const uint64_t hv) {
         return hv & hashmask(ti->hashpower_);
     }
 
@@ -627,10 +625,10 @@ private:
      * alt_index(ti, hv, alt_index(ti, hv, index_hash(ti, hv))) ==
      * index_hash(ti, hv). */
     static inline size_t alt_index(const TableInfo *ti,
-                                   const uint32_t hv,
+                                   const uint64_t hv,
                                    const size_t index) {
         // ensure tag is nonzero for the multiply
-        const uint32_t tag = (hv >> 24) + 1;
+        const uint64_t tag = (hv >> 24) + 1;
         /* 0x5bd1e995 is the hash constant from MurmurHash2 */
         return (index ^ (tag * 0x5bd1e995)) & hashmask(ti->hashpower_);
     }
@@ -713,7 +711,7 @@ private:
                 // for empty slots. This means we completely skip
                 // searching i1 and i2, but they should have already
                 // been searched by cuckoo_insert, so that's okay.
-                const uint32_t hv = hashed_key(ti->buckets_[x.bucket].keys[slot]);
+                const uint64_t hv = hashed_key(ti->buckets_[x.bucket].keys[slot]);
                 b_slot y(alt_index(ti, hv, x.bucket),
                          x.pathcode * SLOT_PER_BUCKET + slot, x.depth+1);
 
@@ -779,7 +777,7 @@ private:
         }
         for (int i = 1; i <= x.depth; i++) {
             CuckooRecord *prev = curr++;
-            const uint32_t prevhv = hashed_key(prev->key);
+            const uint64_t prevhv = hashed_key(prev->key);
             assert(prev->bucket == index_hash(ti, prevhv) ||
                    prev->bucket == alt_index(ti, prevhv, index_hash(ti, prevhv)));
             // We get the bucket that this slot is on by computing the
@@ -969,7 +967,7 @@ private:
         ti->buckets_[i].keys[j] = key;
         ti->buckets_[i].vals[j] = val;
         ti->buckets_[i].occupied.set(j);
-        ti->num_inserts[counterid].num.fetch_add(1);
+        ti->num_inserts[counterid].num.fetch_add(1, std::memory_order_relaxed);
     }
 
     /* try_add_to_bucket will search the bucket and store the index of
@@ -1009,7 +1007,7 @@ private:
             }
             if (ti->buckets_[i].keys[j] == key) {
                 ti->buckets_[i].occupied.reset(j);
-                ti->num_deletes[counterid].num.fetch_add(1);
+                ti->num_deletes[counterid].num.fetch_add(1, std::memory_order_relaxed);
                 return true;
             }
         }
@@ -1036,7 +1034,7 @@ private:
      * the locks to be taken and released outside the function. */
     static cuckoo_status cuckoo_find(const key_type &key,
                                      mapped_type &val,
-                                     const uint32_t hv,
+                                     const uint64_t hv,
                                      const TableInfo *ti,
                                      const size_t i1,
                                      const size_t i2) {
@@ -1058,7 +1056,7 @@ private:
      * concurrency issues, which are explained in the function. */
     cuckoo_status cuckoo_insert(const key_type &key,
                                 const mapped_type &val,
-                                const uint32_t hv,
+                                const uint64_t hv,
                                 TableInfo *ti,
                                 const size_t i1,
                                 const size_t i2) {
@@ -1150,7 +1148,7 @@ private:
     }
 
     /* cuckoo_init initializes the hashtable, given an initial
-     * hashpower as the argument. It allocates one bigint for each
+     * hashpower as the argument. It allocates one cacheint for each
      * core in num_inserts and num_deletes. */
     cuckoo_status cuckoo_init(const size_t hashtable_init) {
         TableInfo *new_table_info = new TableInfo;
