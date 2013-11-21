@@ -26,8 +26,11 @@ extern "C" {
 }
 
 class spinlock {
-    std::atomic_flag lock_ = ATOMIC_FLAG_INIT;
+    std::atomic_flag lock_;
 public:
+    spinlock() {
+        lock_.clear();
+    }
     inline void lock() {
         while (lock_.test_and_set(std::memory_order_acquire));
     }
@@ -969,19 +972,29 @@ private:
         ti->num_inserts[counterid].num.fetch_add(1);
     }
 
-    /* try_add_to_bucket will search the bucket for an empty slot and
-     * place the given key-value pair into that slot. */
+    /* try_add_to_bucket will search the bucket and store the index of
+     * an empty slot if it finds one, or -1 if it doesn't. Regardless,
+     * it will search the entire bucket and return false if it finds
+     * the key already in the table (duplicate key error) and true
+     * otherwise. */
     static bool try_add_to_bucket(TableInfo *ti,
                                   const key_type    &key,
                                   const mapped_type &val,
-                                  const size_t i) {
-        for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
-            if (!ti->buckets_[i].occupied[j]) {
-                add_to_bucket(ti, key, val, i, j);
-                return true;
+                                  const size_t i,
+                                  int& j) {
+        j = -1;
+        bool found = false;
+        for (size_t k = 0; k < SLOT_PER_BUCKET; k++) {
+            if (ti->buckets_[i].occupied[k]) {
+                if (key == ti->buckets_[i].keys[k]) {
+                    return false;
+                }
+            } else if (!found) {
+                found = true;
+                j = k;
             }
         }
-        return false;
+        return true;
     }
 
 
@@ -1049,18 +1062,21 @@ private:
                                 TableInfo *ti,
                                 const size_t i1,
                                 const size_t i2) {
-        mapped_type oldval;
-        if (cuckoo_find(key, oldval, hv, ti, i1, i2) == ok) {
+        int res1, res2;
+        if (!try_add_to_bucket(ti, key, val, i1, res1)) {
             unlock_two(ti, i1, i2);
             return failure_key_duplicated;
-        }
-
-        if (try_add_to_bucket(ti, key, val, i1)) {
+        } else if (res1 != -1) {
+            add_to_bucket(ti, key, val, i1, res1);
             unlock_two(ti, i1, i2);
             return ok;
         }
 
-        if (try_add_to_bucket(ti, key, val, i2)) {
+        if (!try_add_to_bucket(ti, key, val, i2, res2)) {
+            unlock_two(ti, i1, i2);
+            return failure_key_duplicated;
+        } else if (res2 != -1) {
+            add_to_bucket(ti, key, val, i2, res2);
             unlock_two(ti, i1, i2);
             return ok;
         }
@@ -1084,6 +1100,7 @@ private:
              * another insert could have inserted the same key into
              * either i1 or i2, so we check for that before doing the
              * insert. */
+            mapped_type oldval;
             if (cuckoo_find(key, oldval, hv, ti, i1, i2) == ok) {
                 return failure_key_duplicated;
             }
