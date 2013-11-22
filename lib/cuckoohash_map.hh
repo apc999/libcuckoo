@@ -1060,20 +1060,27 @@ private:
                                 TableInfo *ti,
                                 const size_t i1,
                                 const size_t i2) {
+        mapped_type oldval;
         int res1, res2;
         if (!try_add_to_bucket(ti, key, val, i1, res1)) {
             unlock_two(ti, i1, i2);
             return failure_key_duplicated;
-        } else if (res1 != -1) {
-            add_to_bucket(ti, key, val, i1, res1);
-            unlock_two(ti, i1, i2);
-            return ok;
         }
-
+        if (res1 != -1) {
+            if (try_read_from_bucket(ti, key, oldval, i2)) {
+                unlock_two(ti, i1, i2);
+                return failure_key_duplicated;
+            } else {
+                add_to_bucket(ti, key, val, i1, res1);
+                unlock_two(ti, i1, i2);
+                return ok;
+            }
+        }
         if (!try_add_to_bucket(ti, key, val, i2, res2)) {
             unlock_two(ti, i1, i2);
             return failure_key_duplicated;
-        } else if (res2 != -1) {
+        }
+        if (res2 != -1) {
             add_to_bucket(ti, key, val, i2, res2);
             unlock_two(ti, i1, i2);
             return ok;
@@ -1098,7 +1105,6 @@ private:
              * another insert could have inserted the same key into
              * either i1 or i2, so we check for that before doing the
              * insert. */
-            mapped_type oldval;
             if (cuckoo_find(key, oldval, hv, ti, i1, i2) == ok) {
                 return failure_key_duplicated;
             }
