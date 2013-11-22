@@ -18,6 +18,7 @@
 #include <atomic>
 #include <thread>
 #include <stdint.h>
+#include <unistd.h>
 
 #include "cuckoohash_map.hh"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
@@ -241,7 +242,7 @@ void StressTest() {
         }
     }
     // Sleeps before ending the threads
-    std::this_thread::sleep_for(std::chrono::milliseconds(test_len * 1000));
+    sleep(test_len);
     finished.store(true);
     for (size_t i = 0; i < threads.size(); i++) {
         threads[i].join();

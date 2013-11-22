@@ -1,5 +1,6 @@
-/* Tests the throughput (queries/sec) of only inserts between a
- * specific load range in a partially-filled table */
+/* Tests the throughput (queries/sec) of only reads for a specific
+ * amount of time in a partially-filled table. */
+
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
@@ -19,6 +20,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <numeric>
 
 #include "cuckoohash_map.hh"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
@@ -35,17 +37,37 @@ size_t power = 23;
 // command line flag --thread-num
 size_t thread_num = sysconf(_SC_NPROCESSORS_ONLN);
 // The load factor to fill the table up to before testing throughput.
-// This can be set with the command line flag --begin-load.
-size_t begin_load = 0;
-// The maximum load factor to fill the table up to when testing
-// throughput. This can be set with the command line flag
-// --end-load.
-size_t end_load = 90;
+// This can't be set
+size_t partial_load = 50;
 // The seed which the random number generator uses. This can be set
 // with the command line flag --seed
 size_t seed = 0;
+// How many seconds to run the test for. This can be set with the
+// command line flag --time
+size_t test_len = 10;
 
-// Inserts the keys in the given range (with value 0), exiting if there is an expansion
+// When set to true, it signals to the threads to stop running
+std::atomic<bool> finished = ATOMIC_VAR_INIT(false);
+
+// Repeatedly searches for the keys in the given range until the time
+// is up. All the keys in the given range should either be in the
+// table or not in the table.
+void read_thread(cuckoohash_map<KeyType, ValType>& table, std::vector<KeyType>::iterator begin,
+                 std::vector<KeyType>::iterator end, const bool in_table, size_t& reads) {
+    ValType v;
+    while (true) {
+        for (auto it = begin; it != end; it++) {
+            if (finished.load(std::memory_order_acquire)) {
+                return;
+            }
+            ASSERT_EQ(table.find(*begin, v), in_table);
+            reads++;
+        }
+    }
+}
+
+// Inserts the keys in the given range (with value 0), exiting if
+// there is an expansion
 void insert_thread(cuckoohash_map<KeyType, ValType>& table, std::vector<KeyType>::iterator begin, std::vector<KeyType>::iterator end) {
     for (;begin != end; begin++) {
         if (table.hashpower() > power) {
@@ -56,11 +78,12 @@ void insert_thread(cuckoohash_map<KeyType, ValType>& table, std::vector<KeyType>
     }
 }
 
-class InsertEnvironment {
+
+class ReadEnvironment {
 public:
     // We allocate the vectors with the total amount of space in the
     // table, which is bucket_count() * SLOT_PER_BUCKET
-    InsertEnvironment()
+    ReadEnvironment()
         : table(power), numkeys(table.bucket_count()*SLOT_PER_BUCKET), keys(numkeys) {
         // Sets up the random number generator
         if (seed == 0) {
@@ -78,10 +101,10 @@ public:
             keys[swapind] = i+numkeys;
         }
 
-        // We prefill the table to begin_load with thread_num threads,
-        // giving each thread enough keys to insert
+        // We prefill the table to partial_load with thread_num
+        // threads, giving each thread enough keys to insert
         std::vector<std::thread> threads;
-        size_t keys_per_thread = numkeys * (begin_load / 100.0) / thread_num;
+        size_t keys_per_thread = numkeys * (partial_load / 100.0) / thread_num;
         for (size_t i = 0; i < thread_num; i++) {
             threads.emplace_back(insert_thread, std::ref(table), keys.begin()+i*keys_per_thread, keys.begin()+(i+1)*keys_per_thread);
         }
@@ -102,49 +125,50 @@ public:
     size_t init_size;
 };
 
-InsertEnvironment* env;
 
-void InsertThroughputTest() {
+ReadEnvironment* env;
+
+void ReadThroughputTest() {
     std::vector<std::thread> threads;
-    size_t keys_per_thread = env->numkeys * ((end_load-begin_load) / 100.0) / thread_num;
-    timeval t1, t2;
-    gettimeofday(&t1, NULL);
-    for (size_t i = 0; i < thread_num; i++) {
-        threads.emplace_back(insert_thread, std::ref(env->table), env->keys.begin()+(i*keys_per_thread)+env->init_size, env->keys.begin()+((i+1)*keys_per_thread)+env->init_size);
+    std::vector<size_t> counters(thread_num);
+    // We use the first half of the threads to read the init_size
+    // elements that are in the table and the other half to read the
+    // numkeys-init_size elements that aren't in the table.
+    const size_t first_threadnum = thread_num / 2;
+    const size_t second_threadnum = thread_num - thread_num / 2;
+    const size_t in_keys_per_thread = (first_threadnum == 0) ? 0 : env->init_size / first_threadnum;
+    const size_t out_keys_per_thread = (env->numkeys - env->init_size) / second_threadnum;
+    for (size_t i = 0; i < first_threadnum; i++) {
+        threads.emplace_back(read_thread, std::ref(env->table), env->keys.begin() + (i*in_keys_per_thread),
+                             env->keys.begin() + ((i+1)*in_keys_per_thread), true, std::ref(counters[i]));
     }
+    for (size_t i = 0; i < second_threadnum; i++) {
+        threads.emplace_back(read_thread, std::ref(env->table), env->keys.begin() + (i*out_keys_per_thread) + env->init_size,
+                             env->keys.begin() + ((i+1)*out_keys_per_thread + env->init_size), false,
+                             std::ref(counters[first_threadnum+i]));
+    }
+    sleep(test_len);
+    finished.store(true, std::memory_order_release);
     for (size_t i = 0; i < threads.size(); i++) {
         threads[i].join();
     }
-    gettimeofday(&t2, NULL);
-    double elapsed_time = (t2.tv_sec - t1.tv_sec) * 1000.0; // sec to ms
-    elapsed_time += (t2.tv_usec - t1.tv_usec) / 1000.0; // us to ms
-    size_t num_inserts = env->table.size() - env->init_size;
+    size_t total_reads = std::accumulate(counters.begin(), counters.end(), 0);
     // Reports the results
     std::cout << "----------Results----------" << std::endl;
-    std::cout << "Final load factor:\t" << env->table.load_factor() << std::endl;
-    std::cout << "Number of inserts:\t" << num_inserts << std::endl;
-    std::cout << "Time elapsed:\t" << elapsed_time/1000 << " seconds" << std::endl;
-    std::cout << "Throughput: " << std::fixed << (double)num_inserts / (elapsed_time/1000) << " inserts/sec" << std::endl;
+    std::cout << "Number of reads:\t" << total_reads << std::endl;
+    std::cout << "Time elapsed:\t" << test_len << " seconds" << std::endl;
+    std::cout << "Throughput: " << std::fixed << total_reads / (double)test_len << " reads/sec" << std::endl;
 }
 
 int main(int argc, char** argv) {
-    const char* args[] = {"--power", "--thread-num", "--begin-load", "--end-load", "--seed"};
-    size_t* arg_vars[] = {&power, &thread_num, &begin_load, &end_load, &seed};
+    const char* args[] = {"--power", "--thread-num", "--time", "--seed"};
+    size_t* arg_vars[] = {&power, &thread_num, &test_len, &seed};
     const char* arg_help[] = {"The power argument given to the hashtable during initialization",
                               "The number of threads to spawn for each type of operation",
-                              "The load factor to fill the table up to before testing throughput",
-                              "The maximum load factor to fill the table up to when testing throughput",
+                              "The number of seconds to run the test for"
                               "The seed used by the random number generator"};
     parse_flags(argc, argv, args, arg_vars, arg_help, sizeof(args)/sizeof(const char*), nullptr, nullptr, nullptr, 0);
 
-    if (begin_load >= 100) {
-        std::cerr << "--begin-load must be between 0 and 99" << std::endl;
-        exit(1);
-    } else if (begin_load >= end_load) {
-        std::cerr << "--end-load must be greater than --begin-load" << std::endl;
-        exit(1);
-    }
-
-    env = new InsertEnvironment;
-    InsertThroughputTest();
+    env = new ReadEnvironment;
+    ReadThroughputTest();
 }
