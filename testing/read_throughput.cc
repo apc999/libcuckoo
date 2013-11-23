@@ -49,11 +49,31 @@ size_t test_len = 10;
 // When set to true, it signals to the threads to stop running
 std::atomic<bool> finished = ATOMIC_VAR_INIT(false);
 
+/* cacheint is a cache-aligned integer type. */
+struct cacheint {
+    size_t num;
+    cacheint() {
+        num = 0;
+    }
+} __attribute__((aligned(64)));
+
+struct thread_args {
+    std::vector<KeyType>::iterator begin;
+    std::vector<KeyType>::iterator end;
+    cuckoohash_map<KeyType, ValType>& table;
+    cacheint* reads;
+    bool in_table;
+};
+
 // Repeatedly searches for the keys in the given range until the time
 // is up. All the keys in the given range should either be in the
 // table or not in the table.
-void read_thread(cuckoohash_map<KeyType, ValType>& table, std::vector<KeyType>::iterator begin,
-                 std::vector<KeyType>::iterator end, const bool in_table, size_t& reads) {
+void read_thread(thread_args rt_args) {
+    auto begin = rt_args.begin;
+    auto end = rt_args.end;
+    cuckoohash_map<KeyType, ValType>& table = rt_args.table;
+    auto *reads = rt_args.reads;
+    auto in_table = rt_args.in_table;
     ValType v;
     while (true) {
         for (auto it = begin; it != end; it++) {
@@ -61,14 +81,17 @@ void read_thread(cuckoohash_map<KeyType, ValType>& table, std::vector<KeyType>::
                 return;
             }
             ASSERT_EQ(table.find(*begin, v), in_table);
-            reads++;
+            reads->num++;
         }
     }
 }
 
-// Inserts the keys in the given range (with value 0), exiting if
-// there is an expansion
-void insert_thread(cuckoohash_map<KeyType, ValType>& table, std::vector<KeyType>::iterator begin, std::vector<KeyType>::iterator end) {
+// Inserts the keys in the given range in a random order, avoiding
+// inserting duplicates
+void insert_thread(thread_args it_args) {
+    auto begin = it_args.begin;
+    auto end = it_args.end;
+    cuckoohash_map<KeyType, ValType>& table = it_args.table;
     for (;begin != end; begin++) {
         if (table.hashpower() > power) {
             std::cerr << "Expansion triggered" << std::endl;
@@ -77,7 +100,6 @@ void insert_thread(cuckoohash_map<KeyType, ValType>& table, std::vector<KeyType>
         ASSERT_TRUE(table.insert(*begin, 0));
     }
 }
-
 
 class ReadEnvironment {
 public:
@@ -106,7 +128,9 @@ public:
         std::vector<std::thread> threads;
         size_t keys_per_thread = numkeys * (partial_load / 100.0) / thread_num;
         for (size_t i = 0; i < thread_num; i++) {
-            threads.emplace_back(insert_thread, std::ref(table), keys.begin()+i*keys_per_thread, keys.begin()+(i+1)*keys_per_thread);
+            threads.emplace_back(insert_thread, thread_args{keys.begin()+i*keys_per_thread,
+                        keys.begin()+(i+1)*keys_per_thread, std::ref(table), 
+                        nullptr, false});
         }
         for (size_t i = 0; i < threads.size(); i++) {
             threads[i].join();
@@ -130,7 +154,7 @@ ReadEnvironment* env;
 
 void ReadThroughputTest() {
     std::vector<std::thread> threads;
-    std::vector<size_t> counters(thread_num);
+    std::vector<cacheint> counters(thread_num);
     // We use the first half of the threads to read the init_size
     // elements that are in the table and the other half to read the
     // numkeys-init_size elements that aren't in the table.
@@ -139,20 +163,23 @@ void ReadThroughputTest() {
     const size_t in_keys_per_thread = (first_threadnum == 0) ? 0 : env->init_size / first_threadnum;
     const size_t out_keys_per_thread = (env->numkeys - env->init_size) / second_threadnum;
     for (size_t i = 0; i < first_threadnum; i++) {
-        threads.emplace_back(read_thread, std::ref(env->table), env->keys.begin() + (i*in_keys_per_thread),
-                             env->keys.begin() + ((i+1)*in_keys_per_thread), true, std::ref(counters[i]));
+        threads.emplace_back(read_thread, thread_args{env->keys.begin() + (i*in_keys_per_thread),
+                    env->keys.begin() + ((i+1)*in_keys_per_thread), std::ref(env->table), &counters[i], true});
     }
     for (size_t i = 0; i < second_threadnum; i++) {
-        threads.emplace_back(read_thread, std::ref(env->table), env->keys.begin() + (i*out_keys_per_thread) + env->init_size,
-                             env->keys.begin() + ((i+1)*out_keys_per_thread + env->init_size), false,
-                             std::ref(counters[first_threadnum+i]));
+        threads.emplace_back(read_thread, thread_args{env->keys.begin() + (i*out_keys_per_thread) + env->init_size,
+                    env->keys.begin() + ((i+1)*out_keys_per_thread + env->init_size), std::ref(env->table),
+                    &counters[first_threadnum+i], false});
     }
     sleep(test_len);
     finished.store(true, std::memory_order_release);
     for (size_t i = 0; i < threads.size(); i++) {
         threads[i].join();
     }
-    size_t total_reads = std::accumulate(counters.begin(), counters.end(), 0);
+    size_t total_reads = 0;
+    for (size_t i = 0; i < counters.size(); i++) {
+        total_reads += counters[i].num;
+    }
     // Reports the results
     std::cout << "----------Results----------" << std::endl;
     std::cout << "Number of reads:\t" << total_reads << std::endl;
