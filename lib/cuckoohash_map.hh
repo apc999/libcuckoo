@@ -29,13 +29,29 @@ public:
     spinlock() {
         lock_.clear();
     }
+
     inline void lock() {
         while (lock_.test_and_set(std::memory_order_acquire));
     }
+
     inline void unlock() {
         lock_.clear(std::memory_order_release);
     }
+
+    inline bool try_lock() {
+        return !lock_.test_and_set(std::memory_order_acquire);
+    }
+
 } __attribute__((aligned(64)));
+
+// A std::hash-style wrapper around cityhash
+template <class Key>
+class CityHasher {
+public:
+    size_t operator()(Key k) {
+        return CityHash64((const char*) &k, sizeof(k));
+    }
+};
 
 /* We forward-declare the iterator types, since they are needed in the
  * map. */
@@ -232,7 +248,7 @@ public:
      * contends with writes. */
     bool find(const key_type& key, mapped_type& val) {
         check_hazard_pointer();
-        uint64_t hv = hashed_key(key);
+        size_t hv = hashed_key(key);
         TableInfo *ti;
         size_t i1, i2;
         snapshot_and_lock_two(hv, ti, i1, i2);
@@ -264,7 +280,7 @@ public:
     bool insert(const key_type& key, const mapped_type& val) {
         check_hazard_pointer();
         check_counterid();
-        uint64_t hv = hashed_key(key);
+        size_t hv = hashed_key(key);
         TableInfo *ti;
         size_t i1, i2;
         snapshot_and_lock_two(hv, ti, i1, i2);
@@ -297,7 +313,7 @@ public:
     bool erase(const key_type& key) {
         check_hazard_pointer();
         check_counterid();
-        uint64_t hv = hashed_key(key);
+        size_t hv = hashed_key(key);
         TableInfo *ti;
         size_t i1, i2;
         snapshot_and_lock_two(hv, ti, i1, i2);
@@ -313,7 +329,7 @@ public:
      * there, it returns false. */
     bool update(const key_type& key, const mapped_type& val) {
         check_hazard_pointer();
-        uint64_t hv = hashed_key(key);
+        size_t hv = hashed_key(key);
         TableInfo *ti;
         size_t i1, i2;
         snapshot_and_lock_two(hv, ti, i1, i2);
@@ -396,6 +412,8 @@ private:
      * leftover operations, until they are deleted by the global
      * hazard pointer manager. */
     std::list<TableInfo*> old_table_infos;
+
+    static hasher hashfn;
 
     /* lock locks the given bucket index. */
     static inline void lock(const TableInfo *ti, const size_t i) {
@@ -527,7 +545,7 @@ private:
      * Since the positions of the bucket locks depends on the number
      * of buckets in the table, the table_info pointer needs to be
      * grabbed first. */
-    inline void snapshot_and_lock_two(const uint64_t hv, TableInfo*& ti,
+    inline void snapshot_and_lock_two(const size_t hv, TableInfo*& ti,
                                       size_t& i1, size_t& i2) {
     TryAcquire:
         ti = table_info.load();
@@ -588,6 +606,13 @@ private:
     // number of cores on the machine
     static const size_t kNumCores;
 
+    // The maximum number of cuckoo operations per insert. This must
+    // be less than or equal to SLOT_PER_BUCKET^(MAX_BFS_DEPTH+1)
+    static const size_t MAX_CUCKOO_COUNT = 500;
+
+    // The maximum depth of a BFS path
+    static const size_t MAX_BFS_DEPTH = 4;
+
     /* lock_ind converts an index into buckets_ to an index into
      * locks_. */
     static inline size_t lock_ind(const size_t bucket_ind) {
@@ -607,14 +632,13 @@ private:
     }
 
     /* hashed_key hashes the given key. */
-    static inline uint64_t hashed_key(const key_type &key) {
-        // return hasher()(key);
-        return CityHash64((const char*) &key, kKeySize);
+    static inline size_t hashed_key(const key_type &key) {
+        return hashfn(key);
     }
 
     /* index_hash returns the first possible bucket that the given
      * hashed key could be. */
-    static inline size_t index_hash(const TableInfo *ti, const uint64_t hv) {
+    static inline size_t index_hash(const TableInfo *ti, const size_t hv) {
         return hv & hashmask(ti->hashpower_);
     }
 
@@ -625,10 +649,10 @@ private:
      * alt_index(ti, hv, alt_index(ti, hv, index_hash(ti, hv))) ==
      * index_hash(ti, hv). */
     static inline size_t alt_index(const TableInfo *ti,
-                                   const uint64_t hv,
+                                   const size_t hv,
                                    const size_t index) {
         // ensure tag is nonzero for the multiply
-        const uint64_t tag = (hv >> 24) + 1;
+        const size_t tag = (hv >> ti->hashpower_) + 1;
         /* 0x5bd1e995 is the hash constant from MurmurHash2 */
         return (index ^ (tag * 0x5bd1e995)) & hashmask(ti->hashpower_);
     }
@@ -711,7 +735,7 @@ private:
                 // for empty slots. This means we completely skip
                 // searching i1 and i2, but they should have already
                 // been searched by cuckoo_insert, so that's okay.
-                const uint64_t hv = hashed_key(ti->buckets_[x.bucket].keys[slot]);
+                const size_t hv = hashed_key(ti->buckets_[x.bucket].keys[slot]);
                 b_slot y(alt_index(ti, hv, x.bucket),
                          x.pathcode * SLOT_PER_BUCKET + slot, x.depth+1);
 
@@ -777,7 +801,7 @@ private:
         }
         for (int i = 1; i <= x.depth; i++) {
             CuckooRecord *prev = curr++;
-            const uint64_t prevhv = hashed_key(prev->key);
+            const size_t prevhv = hashed_key(prev->key);
             assert(prev->bucket == index_hash(ti, prevhv) ||
                    prev->bucket == alt_index(ti, prevhv, index_hash(ti, prevhv)));
             // We get the bucket that this slot is on by computing the
@@ -981,15 +1005,17 @@ private:
                                   const size_t i,
                                   int& j) {
         j = -1;
-        bool found = false;
+        bool found_empty = false;
         for (size_t k = 0; k < SLOT_PER_BUCKET; k++) {
             if (ti->buckets_[i].occupied[k]) {
                 if (key == ti->buckets_[i].keys[k]) {
                     return false;
                 }
-            } else if (!found) {
-                found = true;
-                j = k;
+            } else {
+                if (!found_empty) {
+                    found_empty = true;
+                    j = k;
+                }
             }
         }
         return true;
@@ -1034,7 +1060,7 @@ private:
      * the locks to be taken and released outside the function. */
     static cuckoo_status cuckoo_find(const key_type &key,
                                      mapped_type &val,
-                                     const uint64_t hv,
+                                     const size_t hv,
                                      const TableInfo *ti,
                                      const size_t i1,
                                      const size_t i2) {
@@ -1056,7 +1082,7 @@ private:
      * concurrency issues, which are explained in the function. */
     cuckoo_status cuckoo_insert(const key_type &key,
                                 const mapped_type &val,
-                                const uint64_t hv,
+                                const size_t hv,
                                 TableInfo *ti,
                                 const size_t i1,
                                 const size_t i2) {
@@ -1066,19 +1092,24 @@ private:
             unlock_two(ti, i1, i2);
             return failure_key_duplicated;
         }
-        if (res1 != -1) {
-            if (try_read_from_bucket(ti, key, oldval, i2)) {
-                unlock_two(ti, i1, i2);
-                return failure_key_duplicated;
-            } else {
-                add_to_bucket(ti, key, val, i1, res1);
-                unlock_two(ti, i1, i2);
-                return ok;
-            }
-        }
+        // if (res1 != -1) {
+        //     if (try_read_from_bucket(ti, key, oldval, i2)) {
+        //         unlock_two(ti, i1, i2);
+        //         return failure_key_duplicated;
+        //     } else {
+        //         add_to_bucket(ti, key, val, i1, res1);
+        //         unlock_two(ti, i1, i2);
+        //         return ok;
+        //     }
+        // }
         if (!try_add_to_bucket(ti, key, val, i2, res2)) {
             unlock_two(ti, i1, i2);
             return failure_key_duplicated;
+        }
+        if (res1 != -1) {
+            add_to_bucket(ti, key, val, i1, res1);
+            unlock_two(ti, i1, i2);
+            return ok;
         }
         if (res2 != -1) {
             add_to_bucket(ti, key, val, i2, res2);
@@ -1399,7 +1430,7 @@ public:
         if (is_end()) {
             throw std::out_of_range(end_dereference);
         }
-        assert(ti_.buckets_[index_].occupied[slot_]);
+        assert(ti_->buckets_[index_].occupied[slot_]);
         return {ti_->buckets_[index_].keys[slot_], ti_->buckets_[index_].vals[slot_]};
     }
 
@@ -1622,7 +1653,7 @@ public:
         if (this->is_end()) {
             throw std::out_of_range(this->end_dereference);
         }
-        assert(this->ti_.buckets_[this->index_].occupied[this->slot_]);
+        assert(this->ti_->buckets_[this->index_].occupied[this->slot_]);
         this->ti_->buckets_[this->index_].vals[this->slot_] = val;
     }
 };

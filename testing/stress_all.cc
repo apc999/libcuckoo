@@ -116,7 +116,7 @@ void insert_thread() {
         // set in_table to true and clear in_use
         size_t ind = env->ind_dist(gen);
         if (!env->in_use[ind].test_and_set()) {
-            KeyType k = ind;
+            KeyType k = env->keys[ind];
             ValType v = env->val_dist(gen);
             ValType2 v2 = env->val_dist2(gen);
             bool res = env->table.insert(k, v);
@@ -149,7 +149,7 @@ void delete_thread() {
         // the tables anymore, and then set in_table to false
         size_t ind = env->ind_dist(gen);
         if (!env->in_use[ind].test_and_set()) {
-            KeyType k = ind;
+            KeyType k = env->keys[ind];
             bool res = env->table.erase(k);
             bool res2 = env->table2.erase(k);
             EXPECT_EQ(res, env->in_table[ind]);
@@ -176,7 +176,7 @@ void update_thread() {
         // table with the new value, and then set in_table to true
         size_t ind = env->ind_dist(gen);
         if (!env->in_use[ind].test_and_set()) {
-            KeyType k = ind;
+            KeyType k = env->keys[ind];
             ValType v = env->val_dist(gen);
             ValType2 v2 = env->val_dist2(gen);
             bool res = env->table.update(k, v);
@@ -207,7 +207,7 @@ void find_thread() {
         // the keys matches in_table
         size_t ind = env->ind_dist(gen);
         if (!env->in_use[ind].test_and_set()) {
-            KeyType k = ind;
+            KeyType k = env->keys[ind];
             ValType v = 0;
             ValType2 v2 = 0;
             bool res = env->table.find(k, v);
