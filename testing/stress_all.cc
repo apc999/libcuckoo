@@ -25,17 +25,21 @@
 #include "test_util.cc"
 
 typedef uint32_t KeyType;
+typedef std::string KeyType2;
 typedef uint32_t ValType;
 typedef int32_t ValType2;
-typedef std::pair<KeyType, ValType> KVPair;
 
-// The number of keys that can be inserted, deleted, and searched on
-const size_t numkeys = 100000000L;
+// The number of keys that can be inserted, deleted, and searched on.
+// For expensive keys, like strings, it can take a while to generate
+// keys, so we define numkeys to be 2^max(20, power) *
+// SLOT_PER_BUCKET. It's possible that if no keys are being deleted,
+// insert can insert all the keys and indefinitely stall, but
+// hopefully that shouldn't happen.
+size_t numkeys;
 // The power argument passed to the hashtable constructor. By default
 // it should be enough to hold numkeys elements. This can be set with
 // the command line flag --power
 size_t power =  24;
-
 // The number of threads spawned for each type of operation. This can
 // be set with the command line flag --thread-num
 size_t thread_num = 4;
@@ -57,6 +61,8 @@ size_t test_len = 10;
 // The seed for the random number generator. If this isn't set to a
 // nonzero value with the --seed flag, the current time is used
 size_t seed = 0;
+// Whether to use strings as the key
+bool use_strings = false;
 
 // When set to true, it signals to the threads to stop running
 std::atomic<bool> finished = ATOMIC_VAR_INIT(false);
@@ -66,6 +72,7 @@ std::atomic<size_t> num_deletes = ATOMIC_VAR_INIT(0);
 std::atomic<size_t> num_updates = ATOMIC_VAR_INIT(0);
 std::atomic<size_t> num_finds = ATOMIC_VAR_INIT(0);
 
+template <class KType>
 class AllEnvironment {
 public:
     AllEnvironment()
@@ -83,15 +90,15 @@ public:
         // Fills in all the vectors except vals, which will be filled
         // in by the insertion threads.
         for (size_t i = 0; i < numkeys; i++) {
-            keys[i] = i;
+            keys[i] = generateKey<KType>(i);
             in_table[i] = false;
             in_use[i].clear();
         }
     }
-        
-    cuckoohash_map<KeyType, ValType> table;
-    cuckoohash_map<KeyType, ValType2> table2;
-    std::vector<KeyType> keys;
+
+    cuckoohash_map<KType, ValType> table;
+    cuckoohash_map<KType, ValType2> table2;
+    std::vector<KType> keys;
     std::vector<ValType> vals;
     std::vector<ValType2> vals2;
     std::unique_ptr<bool[]> in_table;
@@ -102,9 +109,8 @@ public:
     size_t gen_seed;
 };
 
-AllEnvironment* env;
-
-void insert_thread() {
+template <class KType>
+void insert_thread(AllEnvironment<KType> *env) {
     std::mt19937_64 gen(env->gen_seed);
     while (!finished.load()) {
         // Pick a random number between 0 and numkeys. If that slot is
@@ -116,7 +122,7 @@ void insert_thread() {
         // set in_table to true and clear in_use
         size_t ind = env->ind_dist(gen);
         if (!env->in_use[ind].test_and_set()) {
-            KeyType k = env->keys[ind];
+            KType k = env->keys[ind];
             ValType v = env->val_dist(gen);
             ValType2 v2 = env->val_dist2(gen);
             bool res = env->table.insert(k, v);
@@ -140,7 +146,8 @@ void insert_thread() {
     }
 }
 
-void delete_thread() {
+template <class KType>
+void delete_thread(AllEnvironment<KType> *env) {
     std::mt19937_64 gen(env->gen_seed);
     while (!finished.load()) {
         // Run deletes on a random key, check that the deletes
@@ -149,7 +156,7 @@ void delete_thread() {
         // the tables anymore, and then set in_table to false
         size_t ind = env->ind_dist(gen);
         if (!env->in_use[ind].test_and_set()) {
-            KeyType k = env->keys[ind];
+            KType k = env->keys[ind];
             bool res = env->table.erase(k);
             bool res2 = env->table2.erase(k);
             EXPECT_EQ(res, env->in_table[ind]);
@@ -167,7 +174,8 @@ void delete_thread() {
     }
 }
 
-void update_thread() {
+template <class KType>
+void update_thread(AllEnvironment<KType> *env) {
     std::mt19937_64 gen(env->gen_seed);
     while (!finished.load()) {
         // Run updates on a random key, check that the updates
@@ -176,7 +184,7 @@ void update_thread() {
         // table with the new value, and then set in_table to true
         size_t ind = env->ind_dist(gen);
         if (!env->in_use[ind].test_and_set()) {
-            KeyType k = env->keys[ind];
+            KType k = env->keys[ind];
             ValType v = env->val_dist(gen);
             ValType2 v2 = env->val_dist2(gen);
             bool res = env->table.update(k, v);
@@ -199,15 +207,15 @@ void update_thread() {
     }
 }
 
-
-void find_thread() {
+template <class KType>
+void find_thread(AllEnvironment<KType> *env) {
     std::mt19937_64 gen(env->gen_seed);
     while (!finished.load()) {
         // Run finds on a random key and check that the presence of
         // the keys matches in_table
         size_t ind = env->ind_dist(gen);
         if (!env->in_use[ind].test_and_set()) {
-            KeyType k = env->keys[ind];
+            KType k = env->keys[ind];
             ValType v = 0;
             ValType2 v2 = 0;
             bool res = env->table.find(k, v);
@@ -225,20 +233,21 @@ void find_thread() {
 }
 
 // Spawns thread_num insert, delete, update, and find threads
-void StressTest() {
+template <class KType>
+void StressTest(AllEnvironment<KType> *env) {
     std::vector<std::thread> threads;
     for (size_t i = 0; i < thread_num; i++) {
         if (!disable_inserts) {
-            threads.emplace_back(insert_thread);
+            threads.emplace_back(insert_thread<KType>, env);
         }
         if (!disable_deletes) {
-            threads.emplace_back(delete_thread);
+            threads.emplace_back(delete_thread<KType>, env);
         }
         if (!disable_updates) {
-            threads.emplace_back(update_thread);
+            threads.emplace_back(update_thread<KType>, env);
         }
         if (!disable_finds) {
-            threads.emplace_back(find_thread);
+            threads.emplace_back(find_thread<KType>, env);
         }
     }
     // Sleeps before ending the threads
@@ -271,14 +280,23 @@ int main(int argc, char** argv) {
                               "The number of threads to spawn for each type of operation",
                               "The number of seconds to run the test for",
                               "The seed for the random number generator"};
-    const char* flags[] = {"--disable-inserts", "--disable-deletes", "--disable-updates", "--disable-finds"};
-    bool* flag_vars[] = {&disable_inserts, &disable_deletes, &disable_updates, &disable_finds};
+    const char* flags[] = {"--disable-inserts", "--disable-deletes", "--disable-updates", "--disable-finds", "--use-strings"};
+    bool* flag_vars[] = {&disable_inserts, &disable_deletes, &disable_updates, &disable_finds, &use_strings};
     const char* flag_help[] = {"If set, no inserts will be run",
                                "If set, no deletes will be run",
                                "If set, no updates will be run",
-                               "If set, no finds will be run"};
+                               "If set, no finds will be run",
+                               "If set, the key type of the map will be std::string"};
     parse_flags(argc, argv, args, arg_vars, arg_help, sizeof(args)/sizeof(const char*), flags, flag_vars, flag_help, sizeof(flags)/sizeof(const char*));
+    numkeys = (1L << std::max(20uL, power)) * SLOT_PER_BUCKET;
 
-    env = new AllEnvironment;
-    StressTest();
+    if (use_strings) {
+        auto *env = new AllEnvironment<KeyType2>;
+        StressTest(env);
+        delete env;
+    } else {
+        auto *env = new AllEnvironment<KeyType>;
+        StressTest(env);
+        delete env;
+    }
 }

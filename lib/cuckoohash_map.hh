@@ -1325,6 +1325,10 @@ template <class Key, class T, class Hash>
 __thread int cuckoohash_map<Key, T, Hash>::counterid = -1;
 
 template <class Key, class T, class Hash>
+typename cuckoohash_map<Key, T, Hash>::hasher
+cuckoohash_map<Key, T, Hash>::hashfn;
+
+template <class Key, class T, class Hash>
 typename cuckoohash_map<Key, T, Hash>::GlobalHazardPointerList
 cuckoohash_map<Key, T, Hash>::global_hazard_pointers;
 

@@ -110,3 +110,15 @@ void parse_flags(int argc, char**argv,
         }
     }
 }
+
+// generateKey is a function from a number to another given type, used
+// to generate keys for insertion
+template <class T>
+T generateKey(size_t i) {
+    return (T)i;
+}
+template <>
+std::string generateKey<std::string>(size_t i) {
+    return std::to_string(i);
+}
+

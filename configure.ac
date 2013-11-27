@@ -10,6 +10,8 @@ AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_MACRO_DIR([m4])
 
 CPPFLAGS=""
+CFLAGS=""
+CXXFLAGS=""
 dnl Regular debugging
 dnl AX_CHECK_COMPILE_FLAG([-g], [CPPFLAGS="$CPPFLAGS -g"])
 dnl AX_CHECK_COMPILE_FLAG([-gdwarf-2], [CPPFLAGS="$CPPFLAGS -gdwarf-2"])

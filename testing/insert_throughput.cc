@@ -25,6 +25,7 @@
 #include "test_util.cc"
 
 typedef uint32_t KeyType;
+typedef std::string KeyType2;
 typedef uint32_t ValType;
 typedef std::pair<KeyType, ValType> KVPair;
 
@@ -44,9 +45,14 @@ size_t end_load = 90;
 // The seed which the random number generator uses. This can be set
 // with the command line flag --seed
 size_t seed = 0;
+// Whether to use strings as the key
+bool use_strings = false;
 
 // Inserts the keys in the given range (with value 0), exiting if there is an expansion
-void insert_thread(cuckoohash_map<KeyType, ValType>& table, std::vector<KeyType>::iterator begin, std::vector<KeyType>::iterator end) {
+template <class KType>
+void insert_thread(cuckoohash_map<KType, ValType>& table,
+                   typename std::vector<KType>::iterator begin,
+                   typename std::vector<KType>::iterator end) {
     for (;begin != end; begin++) {
         if (table.hashpower() > power) {
             std::cerr << "Expansion triggered" << std::endl;
@@ -56,6 +62,7 @@ void insert_thread(cuckoohash_map<KeyType, ValType>& table, std::vector<KeyType>
     }
 }
 
+template <class KType>
 class InsertEnvironment {
 public:
     // We allocate the vectors with the total amount of space in the
@@ -75,7 +82,7 @@ public:
         for (size_t i = 1; i < numkeys; i++) {
             const size_t swapind = gen() % i;
             keys[i] = keys[swapind];
-            keys[swapind] = i+numkeys;
+            keys[swapind] = generateKey<KType>(i+numkeys);
         }
 
         // We prefill the table to begin_load with thread_num threads,
@@ -83,7 +90,7 @@ public:
         std::vector<std::thread> threads;
         size_t keys_per_thread = numkeys * (begin_load / 100.0) / thread_num;
         for (size_t i = 0; i < thread_num; i++) {
-            threads.emplace_back(insert_thread, std::ref(table), keys.begin()+i*keys_per_thread, keys.begin()+(i+1)*keys_per_thread);
+            threads.emplace_back(insert_thread<KType>, std::ref(table), keys.begin()+i*keys_per_thread, keys.begin()+(i+1)*keys_per_thread);
         }
         for (size_t i = 0; i < threads.size(); i++) {
             threads[i].join();
@@ -95,22 +102,21 @@ public:
         std::cout << "Table with capacity " << numkeys << " prefilled to a load factor of " << table.load_factor() << std::endl;
     }
 
-    cuckoohash_map<KeyType, ValType> table;
+    cuckoohash_map<KType, ValType> table;
     size_t numkeys;
-    std::vector<KeyType> keys;
+    std::vector<KType> keys;
     std::mt19937_64 gen;
     size_t init_size;
 };
 
-InsertEnvironment* env;
-
-void InsertThroughputTest() {
+template <class KType>
+void InsertThroughputTest(InsertEnvironment<KType> *env) {
     std::vector<std::thread> threads;
     size_t keys_per_thread = env->numkeys * ((end_load-begin_load) / 100.0) / thread_num;
     timeval t1, t2;
     gettimeofday(&t1, NULL);
     for (size_t i = 0; i < thread_num; i++) {
-        threads.emplace_back(insert_thread, std::ref(env->table), env->keys.begin()+(i*keys_per_thread)+env->init_size, env->keys.begin()+((i+1)*keys_per_thread)+env->init_size);
+        threads.emplace_back(insert_thread<KType>, std::ref(env->table), env->keys.begin()+(i*keys_per_thread)+env->init_size, env->keys.begin()+((i+1)*keys_per_thread)+env->init_size);
     }
     for (size_t i = 0; i < threads.size(); i++) {
         threads[i].join();
@@ -135,7 +141,10 @@ int main(int argc, char** argv) {
                               "The load factor to fill the table up to before testing throughput",
                               "The maximum load factor to fill the table up to when testing throughput",
                               "The seed used by the random number generator"};
-    parse_flags(argc, argv, args, arg_vars, arg_help, sizeof(args)/sizeof(const char*), nullptr, nullptr, nullptr, 0);
+    const char* flags[] = {"--use-strings"};
+    bool* flag_vars[] = {&use_strings};
+    const char* flag_help[] = {"If set, the key type of the map will be std::string"};
+    parse_flags(argc, argv, args, arg_vars, arg_help, sizeof(args)/sizeof(const char*), flags, flag_vars, flag_help, sizeof(flags)/sizeof(const char*));
 
     if (begin_load >= 100) {
         std::cerr << "--begin-load must be between 0 and 99" << std::endl;
@@ -145,6 +154,13 @@ int main(int argc, char** argv) {
         exit(1);
     }
 
-    env = new InsertEnvironment;
-    InsertThroughputTest();
+    if (use_strings) {
+        auto *env = new InsertEnvironment<KeyType2>;
+        InsertThroughputTest(env);
+        delete env;
+    } else {
+        auto *env = new InsertEnvironment<KeyType>;
+        InsertThroughputTest(env);
+        delete env;
+    }
 }
