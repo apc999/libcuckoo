@@ -29,7 +29,6 @@
 typedef uint32_t KeyType;
 typedef std::string KeyType2;
 typedef uint32_t ValType;
-typedef std::pair<KeyType, ValType> KVPair;
 
 // The power argument passed to the hashtable constructor. This can be
 // set with the command line flag --power.
@@ -39,7 +38,7 @@ size_t power = 23;
 size_t thread_num = sysconf(_SC_NPROCESSORS_ONLN);
 // The load factor to fill the table up to before testing throughput.
 // This can be set with the --load flag
-size_t load = 50;
+size_t load = 90;
 // The seed which the random number generator uses. This can be set
 // with the command line flag --seed
 size_t seed = 0;
@@ -88,6 +87,9 @@ void read_thread(thread_args<KType> rt_args) {
             ASSERT_EQ(table.find(*begin, v), in_table);
             reads->num++;
         }
+        if (finished.load(std::memory_order_acquire)) {
+            return;
+        }
     }
 }
 
@@ -100,7 +102,9 @@ void insert_thread(thread_args<KType> it_args) {
     cuckoohash_map<KType, ValType>& table = it_args.table;
     for (;begin != end; begin++) {
         if (table.hashpower() > power) {
+            print_lock.lock();
             std::cerr << "Expansion triggered" << std::endl;
+            print_lock.unlock();
             exit(1);
         }
         ASSERT_TRUE(table.insert(*begin, 0));
@@ -174,7 +178,7 @@ void ReadThroughputTest(ReadEnvironment<KType> *env) {
     }
     for (size_t i = 0; i < second_threadnum; i++) {
         threads.emplace_back(read_thread<KType>, thread_args<KType>{env->keys.begin() + (i*out_keys_per_thread) + env->init_size,
-                    env->keys.begin() + ((i+1)*out_keys_per_thread + env->init_size), std::ref(env->table),
+                    env->keys.begin() + (i+1)*out_keys_per_thread + env->init_size, std::ref(env->table),
                     &counters[first_threadnum+i], false});
     }
     sleep(test_len);
@@ -204,7 +208,9 @@ int main(int argc, char** argv) {
     const char* flags[] = {"--use-strings"};
     bool* flag_vars[] = {&use_strings};
     const char* flag_help[] = {"If set, the key type of the map will be std::string"};
-    parse_flags(argc, argv, args, arg_vars, arg_help, sizeof(args)/sizeof(const char*), flags, flag_vars, flag_help, sizeof(flags)/sizeof(const char*));
+    parse_flags(argc, argv, "A benchmark for reads", args, arg_vars,
+                arg_help, sizeof(args)/sizeof(const char*), flags,
+                flag_vars, flag_help, sizeof(flags)/sizeof(const char*));
 
     if (use_strings) {
         auto *env = new ReadEnvironment<KeyType2>;

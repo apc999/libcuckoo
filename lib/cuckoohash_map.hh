@@ -318,7 +318,7 @@ public:
         size_t i1, i2;
         snapshot_and_lock_two(hv, ti, i1, i2);
 
-        const cuckoo_status st = cuckoo_delete(key, ti, i1, i2);
+        const cuckoo_status st = cuckoo_delete(key, hv, ti, i1, i2);
         unlock_two(ti, i1, i2);
         unset_hazard_pointer();
 
@@ -334,7 +334,7 @@ public:
         size_t i1, i2;
         snapshot_and_lock_two(hv, ti, i1, i2);
 
-        const cuckoo_status st = cuckoo_update(key, val, ti, i1, i2);
+        const cuckoo_status st = cuckoo_update(key, val, hv, ti, i1, i2);
         unlock_two(ti, i1, i2);
         unset_hazard_pointer();
 
@@ -366,8 +366,10 @@ private:
     /* The Bucket type holds SLOT_PER_BUCKET keys and values, and a
      * occupied bitset, which indicates whether the slot at the given
      * bit index is in the table or not. */
+    typedef char partial_t;
     typedef struct {
         std::bitset<SLOT_PER_BUCKET> occupied;
+        partial_t partials[SLOT_PER_BUCKET];
         key_type keys[SLOT_PER_BUCKET];
         mapped_type vals[SLOT_PER_BUCKET];
     } Bucket;
@@ -657,10 +659,17 @@ private:
         return (index ^ (tag * 0x5bd1e995)) & hashmask(ti->hashpower_);
     }
 
+    /* partial_key returns a partial_t representing the upper
+     * sizeof(partial_t) bytes of the hashed key. This is used for
+     * partial-key cuckoohashing. */
+    static inline partial_t partial_key(const size_t hv) {
+        return (partial_t)(hv >> ((sizeof(size_t)-sizeof(partial_t)) * 8));
+    }
+
     /* CuckooRecord holds one position in a cuckoo path. */
     typedef struct  {
-        size_t   bucket;
-        size_t   slot;
+        size_t bucket;
+        size_t slot;
         key_type key;
     }  CuckooRecord;
 
@@ -727,9 +736,8 @@ private:
         while (q.not_full()) {
             b_slot x = q.dequeue();
             // Picks a random slot to start from
-            const size_t start = (cheap_rand() >> 20) % SLOT_PER_BUCKET;
             for (size_t i = 0; i < SLOT_PER_BUCKET && q.not_full(); i++) {
-                size_t slot = (i+start) % SLOT_PER_BUCKET;
+                size_t slot = i;
                 // Create a new b_slot item, that represents the
                 // bucket we would look at after searching x.bucket
                 // for empty slots. This means we completely skip
@@ -745,7 +753,7 @@ private:
                 // iterating.
                 lock(ti, y.bucket);
                 for (int m = 0; m < SLOT_PER_BUCKET; m++) {
-                    const size_t j = (start+m) % SLOT_PER_BUCKET;
+                    const size_t j = m;
                     if (!ti->buckets_[y.bucket].occupied.test(j)) {
                         y.pathcode = y.pathcode * SLOT_PER_BUCKET + j;
                         unlock(ti, y.bucket);
@@ -879,6 +887,7 @@ private:
                 return false;
             }
 
+            ti->buckets_[tb].partials[ts] = ti->buckets_[fb].partials[fs];
             ti->buckets_[tb].keys[ts] = ti->buckets_[fb].keys[fs];
             ti->buckets_[tb].vals[ts] = ti->buckets_[fb].vals[fs];
             ti->buckets_[tb].occupied.set(ts);
@@ -968,13 +977,15 @@ private:
 
     /* try_read_from-bucket will search the bucket for the given key
      * and store the associated value if it finds it. */
-    static bool try_read_from_bucket(const TableInfo *ti, const key_type &key,
-                                     mapped_type &val, const size_t i) {
+    static bool try_read_from_bucket(const TableInfo *ti, const partial_t partial,
+                                     const key_type &key, mapped_type &val,
+                                     const size_t i) {
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
             if (!ti->buckets_[i].occupied[j]) {
                 continue;
             }
-            if (key == ti->buckets_[i].keys[j]) {
+            if (partial == ti->buckets_[i].partials[j] &&
+                key == ti->buckets_[i].keys[j]) {
                 val = ti->buckets_[i].vals[j];
                 return true;
             }
@@ -984,10 +995,11 @@ private:
 
     /* add_to_bucket will insert the given key-value pair into the
      * slot. */
-    static inline void add_to_bucket(TableInfo *ti, const key_type &key,
-                                     const mapped_type &val, const size_t i,
-                                     const size_t j) {
+    static inline void add_to_bucket(TableInfo *ti, const partial_t partial,
+                                     const key_type &key, const mapped_type &val,
+                                     const size_t i, const size_t j) {
         assert(!ti->buckets_[i].occupied[j]);
+        ti->buckets_[i].partials[j] = partial;
         ti->buckets_[i].keys[j] = key;
         ti->buckets_[i].vals[j] = val;
         ti->buckets_[i].occupied.set(j);
@@ -999,16 +1011,15 @@ private:
      * it will search the entire bucket and return false if it finds
      * the key already in the table (duplicate key error) and true
      * otherwise. */
-    static bool try_add_to_bucket(TableInfo *ti,
-                                  const key_type    &key,
-                                  const mapped_type &val,
-                                  const size_t i,
-                                  int& j) {
+    static bool try_add_to_bucket(TableInfo *ti, const partial_t partial,
+                                  const key_type &key, const mapped_type &val,
+                                  const size_t i, int& j) {
         j = -1;
         bool found_empty = false;
         for (size_t k = 0; k < SLOT_PER_BUCKET; k++) {
             if (ti->buckets_[i].occupied[k]) {
-                if (key == ti->buckets_[i].keys[k]) {
+                if (partial == ti->buckets_[i].partials[k] &&
+                    key == ti->buckets_[i].keys[k]) {
                     return false;
                 }
             } else {
@@ -1021,17 +1032,16 @@ private:
         return true;
     }
 
-
     /* try_del_from_bucket will search the bucket for the given key,
      * and set the slot of the key to empty if it finds it. */
-    static bool try_del_from_bucket(TableInfo *ti,
-                                    const key_type &key,
-                                    const size_t i) {
+    static bool try_del_from_bucket(TableInfo *ti, const partial_t partial,
+                                    const key_type &key, const size_t i) {
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
             if (!ti->buckets_[i].occupied[j]) {
                 continue;
             }
-            if (ti->buckets_[i].keys[j] == key) {
+            if (ti->buckets_[i].partials[j] == partial &&
+                ti->buckets_[i].keys[j] == key) {
                 ti->buckets_[i].occupied.reset(j);
                 ti->num_deletes[counterid].num.fetch_add(1, std::memory_order_relaxed);
                 return true;
@@ -1042,12 +1052,13 @@ private:
 
     /* try_update_bucket will search the bucket for the given key and
      * change its associated value if it finds it. */
-    static bool try_update_bucket(TableInfo *ti,
-                                  const key_type &key,
-                                  const mapped_type &value,
+    static bool try_update_bucket(TableInfo *ti, const partial_t partial,
+                                  const key_type &key, const mapped_type &value,
                                   const size_t i) {
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
-            if (ti->buckets_[i].occupied[j] && ti->buckets_[i].keys[j] == key) {
+            if (ti->buckets_[i].occupied[j] &&
+                ti->buckets_[i].partials[j] == partial &&
+                ti->buckets_[i].keys[j] == key) {
                 ti->buckets_[i].vals[j] = value;
                 return true;
             }
@@ -1058,16 +1069,14 @@ private:
     /* cuckoo_find searches the table for the given key and value,
      * storing the value in the val if it finds the key. It expects
      * the locks to be taken and released outside the function. */
-    static cuckoo_status cuckoo_find(const key_type &key,
-                                     mapped_type &val,
-                                     const size_t hv,
-                                     const TableInfo *ti,
-                                     const size_t i1,
-                                     const size_t i2) {
-        if (try_read_from_bucket(ti, key, val, i1)) {
+    static cuckoo_status cuckoo_find(const key_type& key, mapped_type& val,
+                                     const size_t hv, const TableInfo *ti,
+                                     const size_t i1, const size_t i2) {
+        const partial_t partial = partial_key(hv);
+        if (try_read_from_bucket(ti, partial, key, val, i1)) {
             return ok;
         }
-        if (try_read_from_bucket(ti, key, val, i2)) {
+        if (try_read_from_bucket(ti, partial, key, val, i2)) {
             return ok;
         }
         return failure_key_not_found;
@@ -1080,39 +1089,27 @@ private:
      * handling of the locks. Before inserting, it checks that the key
      * isn't already in the table. cuckoo hashing presents multiple
      * concurrency issues, which are explained in the function. */
-    cuckoo_status cuckoo_insert(const key_type &key,
-                                const mapped_type &val,
-                                const size_t hv,
-                                TableInfo *ti,
-                                const size_t i1,
-                                const size_t i2) {
+    cuckoo_status cuckoo_insert(const key_type &key, const mapped_type &val,
+                                const size_t hv, TableInfo *ti,
+                                const size_t i1, const size_t i2) {
         mapped_type oldval;
         int res1, res2;
-        if (!try_add_to_bucket(ti, key, val, i1, res1)) {
+        const partial_t partial = partial_key(hv);
+        if (!try_add_to_bucket(ti, partial, key, val, i1, res1)) {
             unlock_two(ti, i1, i2);
             return failure_key_duplicated;
         }
-        // if (res1 != -1) {
-        //     if (try_read_from_bucket(ti, key, oldval, i2)) {
-        //         unlock_two(ti, i1, i2);
-        //         return failure_key_duplicated;
-        //     } else {
-        //         add_to_bucket(ti, key, val, i1, res1);
-        //         unlock_two(ti, i1, i2);
-        //         return ok;
-        //     }
-        // }
-        if (!try_add_to_bucket(ti, key, val, i2, res2)) {
+        if (!try_add_to_bucket(ti, partial, key, val, i2, res2)) {
             unlock_two(ti, i1, i2);
             return failure_key_duplicated;
         }
         if (res1 != -1) {
-            add_to_bucket(ti, key, val, i1, res1);
+            add_to_bucket(ti, partial, key, val, i1, res1);
             unlock_two(ti, i1, i2);
             return ok;
         }
         if (res2 != -1) {
-            add_to_bucket(ti, key, val, i2, res2);
+            add_to_bucket(ti, partial, key, val, i2, res2);
             unlock_two(ti, i1, i2);
             return ok;
         }
@@ -1139,7 +1136,7 @@ private:
             if (cuckoo_find(key, oldval, hv, ti, i1, i2) == ok) {
                 return failure_key_duplicated;
             }
-            add_to_bucket(ti, key, val, insert_bucket, insert_slot);
+            add_to_bucket(ti, partial, key, val, insert_bucket, insert_slot);
             unlock_two(ti, i1, i2);
             return ok;
         }
@@ -1153,14 +1150,14 @@ private:
     /* cuckoo_delete searches the table for the given key and sets the
      * slot with that key to empty if it finds it. It expects the
      * locks to be taken and released outside the function. */
-    cuckoo_status cuckoo_delete(const key_type &key,
-                                TableInfo *ti,
-                                const size_t i1,
+    cuckoo_status cuckoo_delete(const key_type &key, const size_t hv,
+                                TableInfo *ti, const size_t i1,
                                 const size_t i2) {
-        if (try_del_from_bucket(ti, key, i1)) {
+        const partial_t partial = partial_key(hv);
+        if (try_del_from_bucket(ti, partial, key, i1)) {
             return ok;
         }
-        if (try_del_from_bucket(ti, key, i2)) {
+        if (try_del_from_bucket(ti, partial, key, i2)) {
             return ok;
         }
         return failure_key_not_found;
@@ -1169,16 +1166,14 @@ private:
     /* cuckoo_update searches the table for the given key and updates
      * its value if it finds it. It expects the locks to be taken and
      * released outside the function. */
-    cuckoo_status cuckoo_update(const key_type &key,
-                                const mapped_type &val,
-                                TableInfo *ti,
-                                const size_t i1,
-                                const size_t i2) {
-
-        if (try_update_bucket(ti, key, val, i1)) {
+    cuckoo_status cuckoo_update(const key_type &key, const mapped_type &val,
+                                const size_t hv, TableInfo *ti,
+                                const size_t i1, const size_t i2) {
+        const partial_t partial = partial_key(hv);
+        if (try_update_bucket(ti, partial, key, val, i1)) {
             return ok;
         }
-        if (try_update_bucket(ti, key, val, i2)) {
+        if (try_update_bucket(ti, partial, key, val, i2)) {
             return ok;
         }
         return failure_key_not_found;

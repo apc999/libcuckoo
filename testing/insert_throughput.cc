@@ -27,7 +27,6 @@
 typedef uint32_t KeyType;
 typedef std::string KeyType2;
 typedef uint32_t ValType;
-typedef std::pair<KeyType, ValType> KVPair;
 
 // The power argument passed to the hashtable constructor. This can be
 // set with the command line flag --power.
@@ -144,7 +143,9 @@ int main(int argc, char** argv) {
     const char* flags[] = {"--use-strings"};
     bool* flag_vars[] = {&use_strings};
     const char* flag_help[] = {"If set, the key type of the map will be std::string"};
-    parse_flags(argc, argv, args, arg_vars, arg_help, sizeof(args)/sizeof(const char*), flags, flag_vars, flag_help, sizeof(flags)/sizeof(const char*));
+    parse_flags(argc, argv, "A benchmark for inserts", args, arg_vars, arg_help,
+                sizeof(args)/sizeof(const char*), flags, flag_vars, flag_help,
+                sizeof(flags)/sizeof(const char*));
 
     if (begin_load >= 100) {
         std::cerr << "--begin-load must be between 0 and 99" << std::endl;

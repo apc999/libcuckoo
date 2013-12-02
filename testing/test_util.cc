@@ -71,9 +71,10 @@ inline void do_assert_true(bool x, const char *xname, size_t line) {
 
 
 // Parses boolean flags and flags with positive integer arguments
-void parse_flags(int argc, char**argv,
+void parse_flags(int argc, char**argv, const char* description,
                  const char* args[], size_t* arg_vars[], const char* arg_help[], size_t arg_num,
                  const char* flags[], bool* flag_vars[], const char* flag_help[], size_t flag_num) {
+
     errno = 0;
     for (int i = 0; i < argc; i++) {
         for (size_t j = 0; j < arg_num; j++) {
@@ -98,13 +99,13 @@ void parse_flags(int argc, char**argv,
             }
         }
         if (strcmp(argv[i], "--help") == 0) {
-            std::cerr << "Runs a stress test on inserts, deletes, and finds" << std::endl;
+            std::cerr << description << std::endl;
             std::cerr << "Arguments:" << std::endl;
             for (size_t j = 0; j < arg_num; j++) {
-                std::cerr << args[j] << ":\t" << arg_help[j] << std::endl;
+                std::cerr << args[j] << " (default " << *arg_vars[j] << "):\t" << arg_help[j] << std::endl;
             }
             for (size_t j = 0; j < flag_num; j++) {
-                std::cerr << flags[j] << ":\t" << flag_help[j] << std::endl;
+                std::cerr << flags[j] << " (default " << (*flag_vars[j] ? "true" : "false") << "):\t" << flag_help[j] << std::endl;
             }
             exit(0);
         }
@@ -117,8 +118,23 @@ template <class T>
 T generateKey(size_t i) {
     return (T)i;
 }
+// This specialization returns a stringified representation of the
+// given integer, repeated to extend its length to around 100
+// characters, so that comparisons take a significant amount of time.
 template <>
 std::string generateKey<std::string>(size_t i) {
-    return std::to_string(i);
+    const std::string num(std::to_string(i));
+    const size_t numsize = num.size();
+    const size_t reps = 100 / numsize;
+    if (reps == 0) {
+        return num;
+    }
+    std::string ret(reps * numsize, '\0');
+    for (size_t i = 0; i < reps; i++) {
+        size_t start = i*numsize;
+        for (size_t j = 0; j < numsize; j++) {
+            ret[start++] = num[j];
+        }
+    }
+    return ret;
 }
-

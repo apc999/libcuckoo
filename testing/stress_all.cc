@@ -287,7 +287,9 @@ int main(int argc, char** argv) {
                                "If set, no updates will be run",
                                "If set, no finds will be run",
                                "If set, the key type of the map will be std::string"};
-    parse_flags(argc, argv, args, arg_vars, arg_help, sizeof(args)/sizeof(const char*), flags, flag_vars, flag_help, sizeof(flags)/sizeof(const char*));
+    parse_flags(argc, argv, "Runs a stress test on inserts, deletes, and finds",
+                args, arg_vars, arg_help, sizeof(args)/sizeof(const char*), flags,
+                flag_vars, flag_help, sizeof(flags)/sizeof(const char*));
     numkeys = (1L << std::max(20uL, power)) * SLOT_PER_BUCKET;
 
     if (use_strings) {
