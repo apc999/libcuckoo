@@ -1309,7 +1309,7 @@ public:
     friend class c_iterator<key_type, mapped_type, hasher>;
     friend class mut_iterator<key_type, mapped_type, hasher>;
 
-    value_type* snapshot_table();
+    std::pair<value_type*, size_t> snapshot_table();
 };
 
 // Initializing the static members
@@ -1676,18 +1676,20 @@ typename cuckoohash_map<K,V,H>::iterator cuckoohash_map<K,V,H>::end() {
 }
 
 /* snapshot_table allocates an array and, using a const_iterator
- * stores all the elements currently in the table, returning the
- * array. */
+ * stores all the elements currently in the table, returning the array
+ * and its size. Note that the array must be freed by the user who
+ * requests it. */
 template <class K, class V, class H>
-typename cuckoohash_map<K,V,H>::value_type* cuckoohash_map<K,V,H>::snapshot_table() {
-    typename cuckoohash_map<K,V,H>::value_type* items = new typename cuckoohash_map<K,V,H>::value_type[cuckoohash_map<K,V,H>::size()];
-    size_t ind = 0;
+std::pair<typename cuckoohash_map<K,V,H>::value_type*, size_t> cuckoohash_map<K,V,H>::snapshot_table() {
     typename cuckoohash_map<K,V,H>::const_iterator it = cuckoohash_map<K,V,H>::cbegin();
+    size_t table_size = cuckoohash_map<K,V,H>::size();
+    typename cuckoohash_map<K,V,H>::value_type* items = new typename cuckoohash_map<K,V,H>::value_type[table_size];
+    size_t ind = 0;
     while (!it.is_end()) {
         items[ind++] = *it;
         it++;
     }
-    return items;
+    return {items, table_size};
 }
 
 #endif

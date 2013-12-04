@@ -54,8 +54,10 @@ void EmptyTableBeginEndIterator() {
 }
 
 bool check_table_snapshot() {
-    Table::value_type *snapshot_items = iter_env->table.snapshot_table();
-    for (size_t i = 0; i < iter_env->table.size(); i++) {
+    auto res = iter_env->table.snapshot_table();
+    Table::value_type *snapshot_items = res.first;
+    size_t table_size = res.second;
+    for (size_t i = 0; i < table_size; i++) {
         if (std::find(iter_env->items, iter_env->items_end, snapshot_items[i]) == iter_env->items_end) {
             return false;
         }
