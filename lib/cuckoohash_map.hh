@@ -16,8 +16,7 @@
 #include <limits>
 #include <bitset>
 #include <unistd.h>
-#include <sched.h>
-#include <stdint.h>
+#include <type_traits>
 
 #include "cuckoohash_config.h"
 #include "util.h"
@@ -593,6 +592,10 @@ private:
         }
     }
 
+    // true if the key is small and simple, which means using partial
+    // keys would probably slow us down
+    static const bool is_simple = std::is_pod<key_type>::value && sizeof(key_type) <= 8;
+
     // key size in bytes
     static const size_t kKeySize = sizeof(key_type);
 
@@ -661,9 +664,15 @@ private:
 
     /* partial_key returns a partial_t representing the upper
      * sizeof(partial_t) bytes of the hashed key. This is used for
-     * partial-key cuckoohashing. */
-    static inline partial_t partial_key(const size_t hv) {
+     * partial-key cuckoohashing. If the key type is POD, we don't use
+     * partial keys, so we just return 0. */
+    template <class Bogus = void*>
+    static inline typename std::enable_if<sizeof(Bogus) && !is_simple, partial_t>::type partial_key(const size_t hv) {
         return (partial_t)(hv >> ((sizeof(size_t)-sizeof(partial_t)) * 8));
+    }
+    template <class Bogus = void*>
+    static inline typename std::enable_if<sizeof(Bogus) && is_simple, partial_t>::type partial_key(const size_t&) {
+        return 0;
     }
 
     /* CuckooRecord holds one position in a cuckoo path. */
@@ -887,7 +896,9 @@ private:
                 return false;
             }
 
-            ti->buckets_[tb].partials[ts] = ti->buckets_[fb].partials[fs];
+            if (!is_simple) {
+                ti->buckets_[tb].partials[ts] = ti->buckets_[fb].partials[fs];
+            }
             ti->buckets_[tb].keys[ts] = ti->buckets_[fb].keys[fs];
             ti->buckets_[tb].vals[ts] = ti->buckets_[fb].vals[fs];
             ti->buckets_[tb].occupied.set(ts);
@@ -984,8 +995,10 @@ private:
             if (!ti->buckets_[i].occupied[j]) {
                 continue;
             }
-            if (partial == ti->buckets_[i].partials[j] &&
-                key == ti->buckets_[i].keys[j]) {
+            if (!is_simple && partial != ti->buckets_[i].partials[j]) {
+                continue;
+            }
+            if (key == ti->buckets_[i].keys[j]) {
                 val = ti->buckets_[i].vals[j];
                 return true;
             }
@@ -999,7 +1012,9 @@ private:
                                      const key_type &key, const mapped_type &val,
                                      const size_t i, const size_t j) {
         assert(!ti->buckets_[i].occupied[j]);
-        ti->buckets_[i].partials[j] = partial;
+        if (!is_simple) {
+            ti->buckets_[i].partials[j] = partial;
+        }
         ti->buckets_[i].keys[j] = key;
         ti->buckets_[i].vals[j] = val;
         ti->buckets_[i].occupied.set(j);
@@ -1018,8 +1033,10 @@ private:
         bool found_empty = false;
         for (size_t k = 0; k < SLOT_PER_BUCKET; k++) {
             if (ti->buckets_[i].occupied[k]) {
-                if (partial == ti->buckets_[i].partials[k] &&
-                    key == ti->buckets_[i].keys[k]) {
+                if (!is_simple && partial != ti->buckets_[i].partials[k]) {
+                    continue;
+                }
+                if (key == ti->buckets_[i].keys[k]) {
                     return false;
                 }
             } else {
@@ -1040,8 +1057,10 @@ private:
             if (!ti->buckets_[i].occupied[j]) {
                 continue;
             }
-            if (ti->buckets_[i].partials[j] == partial &&
-                ti->buckets_[i].keys[j] == key) {
+            if (!is_simple && ti->buckets_[i].partials[j] != partial) {
+                continue;
+            }
+            if (ti->buckets_[i].keys[j] == key) {
                 ti->buckets_[i].occupied.reset(j);
                 ti->num_deletes[counterid].num.fetch_add(1, std::memory_order_relaxed);
                 return true;
@@ -1056,9 +1075,13 @@ private:
                                   const key_type &key, const mapped_type &value,
                                   const size_t i) {
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
-            if (ti->buckets_[i].occupied[j] &&
-                ti->buckets_[i].partials[j] == partial &&
-                ti->buckets_[i].keys[j] == key) {
+            if (ti->buckets_[i].occupied[j]) {
+                continue;
+            }
+            if (!is_simple && ti->buckets_[i].partials[j] != partial) {
+                continue;
+            }
+            if (ti->buckets_[i].keys[j] == key) {
                 ti->buckets_[i].vals[j] = value;
                 return true;
             }

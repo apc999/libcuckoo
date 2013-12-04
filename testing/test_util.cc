@@ -112,29 +112,27 @@ void parse_flags(int argc, char**argv, const char* description,
     }
 }
 
-// generateKey is a function from a number to another given type, used
-// to generate keys for insertion
+/* generateKey is a function from a number to another given type, used
+ * to generate keys for insertion. */
 template <class T>
 T generateKey(size_t i) {
     return (T)i;
 }
-// This specialization returns a stringified representation of the
-// given integer, repeated to extend its length to around 100
-// characters, so that comparisons take a significant amount of time.
+/* This specialization returns a stringified representation of the
+ * given integer, where the number is copied to the end of a long
+ * string of 'a's, in order to make comparisons and hashing take
+ * time. */
 template <>
 std::string generateKey<std::string>(size_t i) {
+    const size_t min_length = 100;
     const std::string num(std::to_string(i));
-    const size_t numsize = num.size();
-    const size_t reps = 100 / numsize;
-    if (reps == 0) {
+    if (num.size() >= min_length) {
         return num;
     }
-    std::string ret(reps * numsize, '\0');
-    for (size_t i = 0; i < reps; i++) {
-        size_t start = i*numsize;
-        for (size_t j = 0; j < numsize; j++) {
-            ret[start++] = num[j];
-        }
+    std::string ret(min_length, 'a');
+    const size_t startret = min_length - num.size();
+    for (size_t i = 0; i < num.size(); i++) {
+        ret[i+startret] = num[i];
     }
     return ret;
 }
