@@ -905,9 +905,9 @@ private:
             ti->buckets_[fb].occupied.reset(fs);
             if (depth == 1) {
                 // Don't unlock fb or ob, since they are needed in
-                // cuckoo_insert. Only unlock tb if it isn't equal to
-                // fb or ob.
-                if (tb != fb && tb != ob) {
+                // cuckoo_insert. Only unlock tb if it doesn't unlock
+                // the same bucket as fb or ob.
+                if (lock_ind(tb) != lock_ind(fb) && lock_ind(tb) != lock_ind(ob)) {
                     unlock(ti, tb);
                 }
             } else {
