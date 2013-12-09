@@ -3,10 +3,10 @@
  * @file   test_cuckoo.c
  * @author Bin Fan <binfan@cs.cmu.edu>
  * @date   Thu Feb 28 15:54:47 2013
- * 
+ *
  * @brief  a simple example of using cuckoo hash table
- * 
- * 
+ *
+ *
  */
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
@@ -31,7 +31,7 @@
 #include "cuckoohash_map.hh"
 #include "cuckoohash_config.h" // for SLOT_PER_BUCKET
 
-int main(int argc, char** argv) 
+int main(int argc, char** argv)
 {
     size_t power = 8;
     size_t numkeys = (1 << power) * SLOT_PER_BUCKET;
@@ -59,7 +59,8 @@ int main(int argc, char** argv)
         //std::cout << it->first << " " << it->second << std::endl;
     }
 
-    table.report();
+    printf("total number of items %zu\n", table.size());
+    printf("load factor %f\n", table.load_factor());
 
     return 0;
 }

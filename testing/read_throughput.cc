@@ -48,9 +48,6 @@ size_t test_len = 10;
 // Whether to use strings as the key
 bool use_strings = false;
 
-// When set to true, it signals to the threads to stop running
-std::atomic<bool> finished = ATOMIC_VAR_INIT(false);
-
 /* cacheint is a cache-aligned integer type. */
 struct cacheint {
     size_t num;
@@ -66,6 +63,7 @@ struct thread_args {
     cuckoohash_map<KType, ValType>& table;
     cacheint* reads;
     bool in_table;
+    std::atomic<bool>* finished;
 };
 
 // Repeatedly searches for the keys in the given range until the time
@@ -78,16 +76,17 @@ void read_thread(thread_args<KType> rt_args) {
     cuckoohash_map<KType, ValType>& table = rt_args.table;
     auto *reads = rt_args.reads;
     auto in_table = rt_args.in_table;
+    std::atomic<bool>* finished = rt_args.finished;
     ValType v;
     while (true) {
         for (auto it = begin; it != end; it++) {
-            if (finished.load(std::memory_order_acquire)) {
+            if (finished->load(std::memory_order_acquire)) {
                 return;
             }
             ASSERT_EQ(table.find(*begin, v), in_table);
             reads->num++;
         }
-        if (finished.load(std::memory_order_acquire)) {
+        if (finished->load(std::memory_order_acquire)) {
             return;
         }
     }
@@ -141,7 +140,7 @@ public:
         for (size_t i = 0; i < thread_num; i++) {
             threads.emplace_back(insert_thread<KType>, thread_args<KType>{keys.begin()+i*keys_per_thread,
                         keys.begin()+(i+1)*keys_per_thread, std::ref(table),
-                        nullptr, false});
+                        nullptr, false, nullptr});
         }
         for (size_t i = 0; i < threads.size(); i++) {
             threads[i].join();
@@ -160,7 +159,6 @@ public:
     size_t init_size;
 };
 
-
 template <class KType>
 void ReadThroughputTest(ReadEnvironment<KType> *env) {
     std::vector<std::thread> threads;
@@ -172,14 +170,16 @@ void ReadThroughputTest(ReadEnvironment<KType> *env) {
     const size_t second_threadnum = thread_num - thread_num / 2;
     const size_t in_keys_per_thread = (first_threadnum == 0) ? 0 : env->init_size / first_threadnum;
     const size_t out_keys_per_thread = (env->numkeys - env->init_size) / second_threadnum;
+    // When set to true, it signals to the threads to stop running
+    std::atomic<bool> finished = ATOMIC_VAR_INIT(false);
     for (size_t i = 0; i < first_threadnum; i++) {
         threads.emplace_back(read_thread<KType>, thread_args<KType>{env->keys.begin() + (i*in_keys_per_thread),
-                    env->keys.begin() + ((i+1)*in_keys_per_thread), std::ref(env->table), &counters[i], true});
+                    env->keys.begin() + ((i+1)*in_keys_per_thread), std::ref(env->table), &counters[i], true, &finished});
     }
     for (size_t i = 0; i < second_threadnum; i++) {
         threads.emplace_back(read_thread<KType>, thread_args<KType>{env->keys.begin() + (i*out_keys_per_thread) + env->init_size,
                     env->keys.begin() + (i+1)*out_keys_per_thread + env->init_size, std::ref(env->table),
-                    &counters[first_threadnum+i], false});
+                    &counters[first_threadnum+i], false, &finished});
     }
     sleep(test_len);
     finished.store(true, std::memory_order_release);

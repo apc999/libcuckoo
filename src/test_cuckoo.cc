@@ -105,8 +105,11 @@ int main(int argc, char** argv)
         }
     }
 
-    smalltable.report();
-    bigtable.report();
+    printf("total number of items %zu\n", smalltable.size());
+    printf("load factor %f\n", smalltable.load_factor());
+
+    printf("total number of items %zu\n", bigtable.size());
+    printf("load factor %f\n", bigtable.load_factor());
 
     printf("[%s]\n", passed ? "PASSED" : "FAILED");
 

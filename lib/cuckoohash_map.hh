@@ -178,14 +178,17 @@ public:
     typedef T                 mapped_type;
     typedef Hash              hasher;
     typedef Pred              key_equal;
-    typedef size_t            size_t;
 
+    /* The constructor creates a new hash table with the given
+     * hashpower. The number of buckets in the new hash table will be
+     * 2^hashpower_init. If constructor fails, it will throw an
+     * exception. */
     explicit cuckoohash_map(size_t hashpower_init = HASHPOWER_DEFAULT) {
-        if (cuckoo_init(hashpower_init) != ok) {
-            throw std::runtime_error("Initialization failure");
-        }
+        cuckoo_init(hashpower_init);
     }
 
+    /* The destructor deletes any remaining table pointers managed by
+     * the hash table. */
     ~cuckoohash_map() {
         TableInfo *ti = table_info.load();
         if (ti != nullptr) {
@@ -280,7 +283,9 @@ public:
     /* insert puts the given key-value pair into the table. It first
      * checks that the key isn't already in the table, since the table
      * doesn't support duplicate keys. If the table is out of space,
-     * insert will automatically expand until it can succeed. */
+     * insert will automatically expand until it can succeed. Note
+     * that expansion can throw an exception, which insert will not
+     * handle. */
     bool insert(const key_type& key, const mapped_type& val) {
         check_hazard_pointer();
         check_counterid();
@@ -301,7 +306,7 @@ public:
             // again. If it's failure_table_full, we have to expand
             // the table before trying again.
             if (st == failure_table_full) {
-                if (cuckoo_expand_simple() == failure_under_expansion) {
+                if (cuckoo_expand_simple(ti->hashpower_+1) == failure_under_expansion) {
                     DBG("expansion is on-going\n", NULL);
                 }
             }
@@ -345,25 +350,55 @@ public:
         return (st == ok);
     }
 
-    /* expand will double the size of the existing table. */
-    bool expand() {
+    /* rehash will size the table using the hashpower specified by n.
+     * Note that the number of buckets in the table will be 2^n after
+     * expansion. If n is not larger than the current hashpower, then
+     * the function does nothing. It returns true if the table
+     * expansion succeeded, and false otherwise. rehash can throw an
+     * exception if the expansion fails to allocate enough memory for
+     * the larger table. */
+    bool rehash(size_t n) {
         check_hazard_pointer();
-        const cuckoo_status st = cuckoo_expand_simple();
+        TableInfo* ti = snapshot_table_nolock();
+        if (n <= ti->hashpower_) {
+            return false;
+        }
+        const cuckoo_status st = cuckoo_expand_simple(n);
         unset_hazard_pointer();
         return (st == ok);
     }
 
-    /* report prints out some information about the current state of
-     * the table*/
-    void report() {
+    /* reserve will size the table to hold at least enough elements as
+     * specified by n. If the table can already hold that many
+     * elements, the function has no effect. Otherwise, the function
+     * will expand the table to a hashpower sufficient to hold n
+     * elements. It will return true if there was an expansion, and
+     * false otherwise. reserve can throw an exception if the
+     * expansion fails to allocate enough memory for the larger
+     * table. */
+    bool reserve(size_t n) {
         check_hazard_pointer();
-        TableInfo *ti = snapshot_table_nolock();
-        const size_t s = cuckoo_size(ti);
-        printf("total number of items %zu\n", s);
-        printf("total size %zu Bytes, or %.2f MB\n",
-               ti->tablesize_, (float) ti->tablesize_ / (1 << 20));
-        printf("load factor %.4f\n", 1.0 * s / SLOT_PER_BUCKET / hashsize(ti->hashpower_));
+        TableInfo* ti = snapshot_table_nolock();
+        if (n <= hashsize(ti->hashpower_) * SLOT_PER_BUCKET) {
+            return false;
+        }
+        size_t new_hashpower = (size_t)ceil(log2((double)n / 8.0));
+        assert(n <= hashsize(new_hashpower) * SLOT_PER_BUCKET);
+        const cuckoo_status st = cuckoo_expand_simple(new_hashpower);
         unset_hazard_pointer();
+        return (st == ok);
+    }
+
+    /* hash_function returns the hash function object used by the
+     * table. */
+    hasher hash_function() {
+        return hashfn;
+    }
+
+    /* key_eq returns the equality predicate object used by the
+     * table. */
+    key_equal key_eq() {
+        return eqfn;
     }
 
 private:
@@ -535,7 +570,7 @@ private:
      * equals the address of a previously deleted one, however it
      * doesn't matter, since we would still be looking at the most
      * recent table_info in that case. */
-    inline TableInfo* snapshot_table_nolock() {
+    TableInfo* snapshot_table_nolock() {
         TableInfo *ti;
     TryAcquire:
         ti = table_info.load();
@@ -552,8 +587,8 @@ private:
      * Since the positions of the bucket locks depends on the number
      * of buckets in the table, the table_info pointer needs to be
      * grabbed first. */
-    inline void snapshot_and_lock_two(const size_t hv, TableInfo*& ti,
-                                      size_t& i1, size_t& i2) {
+    void snapshot_and_lock_two(const size_t hv, TableInfo*& ti,
+                               size_t& i1, size_t& i2) {
     TryAcquire:
         ti = table_info.load();
         *hazard_pointer = static_cast<void*>(ti);
@@ -574,7 +609,7 @@ private:
      * expansion_lock mutex, so multiple calls to this function cannot
      * take place at the same time. Therefore, we don't need to check
      * for expanded tables. */
-    inline TableInfo *snapshot_and_lock_all() {
+    TableInfo *snapshot_and_lock_all() {
         assert(!expansion_lock.try_lock());
         TableInfo *ti = table_info.load();
         *hazard_pointer = static_cast<void*>(ti);
@@ -793,7 +828,6 @@ private:
                                  const size_t i1, const size_t i2) {
         b_slot x = slot_search(ti, i1, i2);
         if (x.depth == -1) {
-            DBG("max cuckoo achieved, abort\n", NULL);
             return -1;
         }
         // Fill in the cuckoo path slots from the end to the beginning
@@ -1215,7 +1249,7 @@ private:
             new_table_info->num_deletes.resize(kNumCores);
         } catch (std::bad_alloc&) {
             delete new_table_info;
-            return failure;
+            throw;
         }
 
         table_info.store(new_table_info);
@@ -1227,10 +1261,9 @@ private:
     /* cuckoo_clear empties the table. */
     cuckoo_status cuckoo_clear() {
         check_hazard_pointer();
+        expansion_lock.lock();
         TableInfo *ti = snapshot_and_lock_all();
-        if (ti == nullptr) {
-            return cuckoo_clear();
-        }
+        assert(ti != nullptr);
 
         for (size_t i = 0; i < hashsize(ti->hashpower_); i++) {
             ti->buckets_[i].occupied.reset();
@@ -1242,6 +1275,7 @@ private:
         }
 
         unlock_all(ti);
+        expansion_lock.unlock();
         unset_hazard_pointer();
         return ok;
     }
@@ -1275,45 +1309,65 @@ private:
         }
     }
 
-    /* cuckoo_expand_simple is a simpler version of expansion than
-     * cuckoo_expand, which will double the size of the existing hash
-     * table. It needs to take all the bucket locks, since no other
-     * operations can change the table during expansion. */
     // expansion_lock serializes functions that call
     // snapshot_and_lock_all, thereby ensuring that multiple
     // expansions and iterator constructions cannot occur
     // simultaneously.
     std::mutex expansion_lock;
-    cuckoo_status cuckoo_expand_simple() {
+
+    /* cuckoo_expand_simple is a simpler version of expansion than
+     * cuckoo_expand, which will double the size of the existing hash
+     * table. It needs to take all the bucket locks, since no other
+     * operations can change the table during expansion. If some other
+     * thread is holding the expansion thread at the time, then it
+     * will return failure_under_expansion. */
+    cuckoo_status cuckoo_expand_simple(size_t n) {
         if (!expansion_lock.try_lock()) {
+            unset_hazard_pointer();
             return failure_under_expansion;
         }
         TableInfo *ti = snapshot_and_lock_all();
         assert(ti != nullptr);
-
-        // Creates a new hash table twice the size and adds all the
-        // elements from the old buckets
-        cuckoohash_map<Key, T, Hash> new_map(ti->hashpower_+1);
-        const size_t threadnum = kNumCores;
-        const size_t buckets_per_thread = hashsize(ti->hashpower_) / threadnum;
-        std::vector<std::thread> insertion_threads(threadnum);
-        for (size_t i = 0; i < threadnum-1; i++) {
-            insertion_threads[i] = std::thread(
-                insert_into_table, std::ref(new_map),
-                ti, i*buckets_per_thread, (i+1)*buckets_per_thread);
-        }
-        insertion_threads[threadnum-1] = std::thread(
-            insert_into_table, std::ref(new_map),
-            ti, (threadnum-1)*buckets_per_thread, hashsize(ti->hashpower_));
-        for (size_t i = 0; i < threadnum; i++) {
-            insertion_threads[i].join();
+        if (n <= ti->hashpower_) {
+            // Most likely another expansion ran before this one could
+            // grab the locks
+            unlock_all(ti);
+            unset_hazard_pointer();
+            expansion_lock.unlock();
+            return failure_under_expansion;
         }
 
-        // Sets this table_info to new_map's. It then sets new_map's
-        // table_info to nullptr, so that it doesn't get deleted when
-        // new_map goes out of scope
-        table_info.store(new_map.table_info.load());
-        new_map.table_info.store(nullptr);
+        try {
+            // Creates a new hash table with hashpower n and adds all
+            // the elements from the old buckets
+            cuckoohash_map<Key, T, Hash> new_map(n);
+            const size_t threadnum = kNumCores;
+            const size_t buckets_per_thread = hashsize(ti->hashpower_) / threadnum;
+            std::vector<std::thread> insertion_threads(threadnum);
+            for (size_t i = 0; i < threadnum-1; i++) {
+                insertion_threads[i] = std::thread(
+                    insert_into_table, std::ref(new_map),
+                    ti, i*buckets_per_thread, (i+1)*buckets_per_thread);
+            }
+            insertion_threads[threadnum-1] = std::thread(
+                insert_into_table, std::ref(new_map), ti,
+                (threadnum-1)*buckets_per_thread, hashsize(ti->hashpower_));
+            for (size_t i = 0; i < threadnum; i++) {
+                insertion_threads[i].join();
+            }
+            // Sets this table_info to new_map's. It then sets new_map's
+            // table_info to nullptr, so that it doesn't get deleted when
+            // new_map goes out of scope
+            table_info.store(new_map.table_info.load());
+            new_map.table_info.store(nullptr);
+        } catch (std::bad_alloc& e) {
+            // Unlocks resources and rethrows the exception
+            unlock_all(ti);
+            unset_hazard_pointer();
+            expansion_lock.unlock();
+            throw;
+        }
+
         // Rather than deleting ti now, we store it in
         // old_table_infos. The hazard pointer manager will delete it
         // if no other threads are using the pointer.
@@ -1324,7 +1378,7 @@ private:
         expansion_lock.unlock();
         return ok;
     }
-    
+
     // Iterator definitions
 public:
     friend class const_iterator;
@@ -1352,12 +1406,13 @@ public:
         const_iterator(cuckoohash_map<Key, T, Hash, Pred> *hm, bool is_end) {
             cuckoohash_map<Key, T, Hash, Pred>::check_hazard_pointer();
             hm_ = hm;
-            do {
-                hm->expansion_lock.lock();
-                ti_ = hm_->snapshot_and_lock_all();
-            } while (ti_ == nullptr);
+            hm->expansion_lock.lock();
+            ti_ = hm_->snapshot_and_lock_all();
+            assert(ti_ != nullptr);
 
             has_table_lock = true;
+
+            index_ = slot_ = 0;
 
             set_end(end_pos.first, end_pos.second);
             set_begin(begin_pos.first, begin_pos.second);
@@ -1652,6 +1707,8 @@ public:
             assert(this->ti_->buckets_[this->index_].occupied[this->slot_]);
             this->ti_->buckets_[this->index_].vals[this->slot_] = val;
         }
+
+        friend class cuckoohash_map<Key, T, Hash, Pred>;
     };
 
 // Public iterator functions
@@ -1669,20 +1726,18 @@ public:
         return iterator(this, true);
     }
 
-    /* snapshot_table allocates an array and, using a const_iterator
-     * stores all the elements currently in the table, returning the
-     * array and its size. Note that the array must be freed by the
-     * user who requests it. */
-    std::pair<value_type*, size_t> snapshot_table() {
+    /* snapshot_table allocates a vector and, using a const_iterator
+     * stores all the elements currently in the table. */
+    std::vector<value_type> snapshot_table() {
         const_iterator it = cbegin();
         size_t table_size = size();
-        value_type* items = new value_type[table_size];
+        std::vector<value_type> items(table_size);
         size_t ind = 0;
         while (!it.is_end()) {
             items[ind++] = *it;
             it++;
         }
-        return {items, table_size};
+        return items;
     }
 };
 

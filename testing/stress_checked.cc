@@ -1,6 +1,6 @@
-/* Tests concurrent inserts, deletes, and finds. The test makes sure
- * that multiple operations are not run on the same key, so that the
- * accuracy of the operations can be verified */
+/* Tests concurrent inserts, deletes, updates, and finds. The test
+ * makes sure that multiple operations are not run on the same key, so
+ * that the accuracy of the operations can be verified. */
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
@@ -252,7 +252,7 @@ void StressTest(AllEnvironment<KType> *env) {
     }
     // Sleeps before ending the threads
     sleep(test_len);
-    finished.store(true);
+    // finished.store(true);
     for (size_t i = 0; i < threads.size(); i++) {
         threads[i].join();
     }
@@ -269,8 +269,6 @@ void StressTest(AllEnvironment<KType> *env) {
     std::cout << "Number of deletes:\t" << num_deletes.load() << std::endl;
     std::cout << "Number of updates:\t" << num_updates.load() << std::endl;
     std::cout << "Number of finds:\t" << num_finds.load() << std::endl;
-    std::cout << "Table report:" << std::endl;
-    env->table.report();
 }
 
 int main(int argc, char** argv) {

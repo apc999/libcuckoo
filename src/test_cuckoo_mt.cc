@@ -185,7 +185,7 @@ static void *insert_thread(void *arg) {
             }
             else {
                 printf("[writer%d] table is full when inserting key %zu\n", th->id, th->ops);
-                ret = table->expand();
+                ret = table->rehash(table->hashpower()+1);
                 if (ret) {
                     i--;
                 }
@@ -236,7 +236,8 @@ int main(int argc, char** argv)
 
     printf("initializing hash table with power=%zu\n", power);
     table = new Table(power);
-    table->report();
+    printf("total number of items %zu\n", table->size());
+    printf("load factor %f\n", table->load_factor());
 
     pthread_t* readers = new pthread_t[num_readers];
     pthread_t* writers = new pthread_t[num_writers];
@@ -305,7 +306,8 @@ int main(int argc, char** argv)
             passed = false;
     }
 
-    table->report();
+    printf("total number of items %zu\n", table->size());
+    printf("load factor %f\n", table->load_factor());
     delete table;
 
     printf("[%s]\n", passed ? "PASSED" : "FAILED");

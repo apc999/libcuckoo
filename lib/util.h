@@ -84,7 +84,7 @@ void set_bit(char* p, size_t k, bool v) {
 
 
 #if DEBUG
-#  define DBG(fmt, args...)  fprintf(stderr, ANSI_COLOR_GREEN"[libcuckoo:%s:%d:%zu] " fmt"" ANSI_COLOR_RESET,__FILE__,__LINE__,pthread_self(), args)
+#  define DBG(fmt, args...)  fprintf(stderr, ANSI_COLOR_GREEN"[libcuckoo:%s:%d:%lu] " fmt"" ANSI_COLOR_RESET,__FILE__,__LINE__, (unsigned long)pthread_self(), args)
 #else
 #  define DBG(fmt, args...)  do {} while (0)
 #endif

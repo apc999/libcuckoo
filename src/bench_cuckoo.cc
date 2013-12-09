@@ -154,7 +154,8 @@ int main(int argc, char **argv)
     printf("[bench] insert_time  = %.2f seconds\n", td );
     printf("[bench] insert_tput  = %.2f M items / sec\n", ninserted / td / MILLION);
 
-    table->report();
+    printf("total number of items %zu\n", table->size());
+    printf("load factor %f\n", table->load_factor());
 
     std::mt19937_64 rng;
     rng.seed(static_cast<unsigned int>(std::time(0)));
