@@ -30,14 +30,7 @@ typedef std::string KeyType2;
 typedef uint32_t ValType;
 typedef int32_t ValType2;
 
-// The number of keys that can be inserted, deleted, and searched on.
-// For expensive keys, like strings, it can take a while to generate
-// keys, so we define numkeys to be 2^max(20, power) *
-// SLOT_PER_BUCKET.
-size_t numkeys;
-// The power argument passed to the hashtable constructor. By default
-// it should be enough to hold numkeys elements. This can be set with
-// the command line flag --power
+// The power argument passed to the hashtable constructor.
 size_t power = 21;
 // The number of threads spawned for each type of operation. This can
 // be set with the command line flag --thread-num
@@ -79,86 +72,73 @@ template <class KType>
 class AllEnvironment {
 public:
     AllEnvironment()
-        : table(power), table2(power), keys(numkeys), vals(numkeys), vals2(numkeys),
-          val_dist(std::numeric_limits<ValType>::min(), std::numeric_limits<ValType>::max()),
-          val_dist2(std::numeric_limits<ValType2>::min(), std::numeric_limits<ValType2>::max()),
-          ind_dist(0, numkeys-1), finished(false) {
+        : table(power), table2(power), finished(false) {
         // Sets up the random number generator
         if (seed == 0) {
             seed = std::chrono::system_clock::now().time_since_epoch().count();
         }
         std::cout << "seed = " << seed << std::endl;
         gen_seed = seed;
-
-        // Fills in all the vectors except vals, which will be filled
-        // in by the insertion threads.
-        for (size_t i = 0; i < numkeys; i++) {
-            keys[i] = generateKey<KType>(i);
-        }
     }
 
     cuckoohash_map<KType, ValType> table;
     cuckoohash_map<KType, ValType2> table2;
-    std::vector<KType> keys;
-    std::vector<ValType> vals;
-    std::vector<ValType2> vals2;
-    std::uniform_int_distribution<ValType> val_dist;
-    std::uniform_int_distribution<ValType2> val_dist2;
-    std::uniform_int_distribution<size_t> ind_dist;
     size_t gen_seed;
     std::atomic<bool> finished;
 };
 
 template <class KType>
 void insert_thread(AllEnvironment<KType> *env, size_t seed) {
+    std::uniform_int_distribution<size_t> ind_dist;
+    std::uniform_int_distribution<ValType> val_dist;
+    std::uniform_int_distribution<ValType2> val_dist2;
     std::mt19937_64 gen(seed);
     while (!env->finished.load()) {
-        // Pick a random number between 0 and numkeys and insert a
-        // random value into the table on that key.
-        size_t ind = env->ind_dist(gen);
-        KType k = env->keys[ind];
-        ValType v = env->val_dist(gen);
-        env->table.insert(env->keys[ind], v);
-        env->table2.insert(k, env->val_dist2(gen));
+        // Insert a random key into the table
+        KType k = generateKey<KType>(ind_dist(gen));
+        ValType v = val_dist(gen);
+        env->table.insert(k, v);
+        env->table2.insert(k, val_dist2(gen));
     }
 }
 
 template <class KType>
 void delete_thread(AllEnvironment<KType> *env, size_t seed) {
+    std::uniform_int_distribution<size_t> ind_dist;
     std::mt19937_64 gen(seed);
     while (!env->finished.load()) {
         // Run deletes on a random key.
-        size_t ind = env->ind_dist(gen);
-        const KType k = env->keys[ind];
-        env->table.erase(env->keys[ind]);
+        const KType k = generateKey<KType>(ind_dist(gen));
+        env->table.erase(k);
         env->table2.erase(k);
     }
 }
 
 template <class KType>
 void update_thread(AllEnvironment<KType> *env, size_t seed) {
+    std::uniform_int_distribution<size_t> ind_dist;
+    std::uniform_int_distribution<ValType> val_dist;
+    std::uniform_int_distribution<ValType2> val_dist2;
     std::mt19937_64 gen(seed);
     while (!env->finished.load()) {
         // Run updates on a random key.
-        size_t ind = env->ind_dist(gen);
-        KType k = env->keys[ind];
-        ValType v2 = env->val_dist2(gen);
-        env->table.update(k, env->val_dist(gen));
-        env->table2.update(env->keys[ind], v2);
+        const KType k = generateKey<KType>(ind_dist(gen));
+        env->table.update(k, val_dist(gen));
+        env->table2.update(k, val_dist2(gen));
     }
 }
 
 template <class KType>
 void find_thread(AllEnvironment<KType> *env, size_t seed) {
+    std::uniform_int_distribution<size_t> ind_dist;
     std::mt19937_64 gen(seed);
+    ValType v;
     while (!env->finished.load()) {
         // Run finds on a random key.
-        size_t ind = env->ind_dist(gen);
-        KType k = env->keys[ind];
-        ValType v = 0;
+        const KType k = generateKey<KType>(ind_dist(gen));
         env->table.find(k, v);
         try {
-            env->table2.find(env->keys[ind]);
+            env->table2.find(k);
         } catch (...) {}
     }
 }
@@ -166,51 +146,39 @@ void find_thread(AllEnvironment<KType> *env, size_t seed) {
 template <class KType>
 void resize_thread(AllEnvironment<KType> *env, size_t seed) {
     std::mt19937_64 gen(seed);
-    // Resizes between 3 and 5 times
-    const size_t num_resizes = gen() % 3 + 3;
-    const size_t sleep_time = test_len / num_resizes;
-    for (size_t i = 0; i < num_resizes; i++) {
-        if (env->finished.load()) {
-            return;
-        }
-        sleep(sleep_time);
-        if (env->finished.load()) {
-            return;
-        }
-        const size_t hashpower = env->table2.hashpower();
-        if (gen() & 1) {
-            env->table.rehash(hashpower + 1);
-            env->table.rehash(hashpower / 2);
-        } else {
-            env->table2.reserve((1U << (hashpower+1)) * SLOT_PER_BUCKET);
-            env->table2.reserve((1U << hashpower) * SLOT_PER_BUCKET);
-        }
+    // Resizes at a random time
+    const size_t sleep_time = gen() % test_len;
+    sleep(sleep_time);
+    if (env->finished.load()) {
+        return;
+    }
+    const size_t hashpower = env->table2.hashpower();
+    if (gen() & 1) {
+        env->table.rehash(hashpower + 1);
+        env->table.rehash(hashpower / 2);
+    } else {
+        env->table2.reserve((1U << (hashpower+1)) * SLOT_PER_BUCKET);
+        env->table2.reserve((1U << hashpower) * SLOT_PER_BUCKET);
     }
 }
 
 template <class KType>
 void iterator_thread(AllEnvironment<KType> *env, size_t seed) {
     std::mt19937_64 gen(seed);
-    // Runs iteration operations between 5 and 8 times
-    const size_t num_resizes = gen() % 4 + 5;
-    const size_t sleep_time = test_len / num_resizes;
-    for (size_t i = 0; i < num_resizes; i++) {
-        if (env->finished.load()) {
-            return;
-        }
-        sleep(sleep_time);
-        if (env->finished.load()) {
-            return;
-        }
-        if (gen() & 1) {
-             for (auto it = env->table2.begin(); !it.is_end(); it++) {
-                if (gen() & 1) {
-                    it.set_value((*it).second + 1);
-                }
+    // Runs an iteration operation at a random time
+    const size_t sleep_time = gen() % test_len;
+    sleep(sleep_time);
+    if (env->finished.load()) {
+        return;
+    }
+    if (gen() & 1) {
+        for (auto it = env->table2.begin(); !it.is_end(); it++) {
+            if (gen() & 1) {
+                it.set_value((*it).second + 1);
             }
-        } else {
-            auto res = env->table.snapshot_table();
         }
+    } else {
+        auto res = env->table.snapshot_table();
     }
 }
 
@@ -218,30 +186,26 @@ template <class KType>
 void statistics_thread(AllEnvironment<KType> *env) {
     // Runs all the statistics functions
     std::mt19937_64 gen(seed);
-    if (env->finished.load()) {
+    while (!env->finished.load()) {
         env->table.size();
         env->table.empty();
         env->table.bucket_count();
         env->table.load_factor();
+        env->table.hash_function();
+        env->table.key_eq();
     }
 }
 
 template <class KType>
 void clear_thread(AllEnvironment<KType> *env, size_t seed) {
     std::mt19937_64 gen(seed);
-    // Runs clear operations between 3 and 5 times
-    const size_t num_resizes = gen() % 3 + 3;
-    const size_t sleep_time = test_len / num_resizes;
-    for (size_t i = 0; i < num_resizes; i++) {
-        if (env->finished.load()) {
-            return;
-        }
-        sleep(sleep_time);
-        if (env->finished.load()) {
-            return;
-        }
-        env->table.clear();
+    // Runs a clear operation at a random time
+    const size_t sleep_time = gen() % test_len;
+    sleep(sleep_time);
+    if (env->finished.load()) {
+        return;
     }
+    env->table.clear();
 }
 
 // Spawns thread_num threads for each type of operation
@@ -310,7 +274,6 @@ int main(int argc, char** argv) {
     parse_flags(argc, argv, "Runs a stress test on inserts, deletes, and finds",
                 args, arg_vars, arg_help, sizeof(args)/sizeof(const char*), flags,
                 flag_vars, flag_help, sizeof(flags)/sizeof(const char*));
-    numkeys = (1L << std::max(20uL, power)) * SLOT_PER_BUCKET;
 
     if (use_strings) {
         auto *env = new AllEnvironment<KeyType2>;

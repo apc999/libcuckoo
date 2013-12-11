@@ -64,9 +64,6 @@ size_t seed = 0;
 // Whether to use strings as the key
 bool use_strings = false;
 
-// When set to true, it signals to the threads to stop running
-std::atomic<bool> finished = ATOMIC_VAR_INIT(false);
-
 std::atomic<size_t> num_inserts = ATOMIC_VAR_INIT(0);
 std::atomic<size_t> num_deletes = ATOMIC_VAR_INIT(0);
 std::atomic<size_t> num_updates = ATOMIC_VAR_INIT(0);
@@ -79,7 +76,7 @@ public:
         : table(power), table2(power), keys(numkeys), vals(numkeys), vals2(numkeys), in_table(new bool[numkeys]), in_use(numkeys),
           val_dist(std::numeric_limits<ValType>::min(), std::numeric_limits<ValType>::max()),
           val_dist2(std::numeric_limits<ValType2>::min(), std::numeric_limits<ValType2>::max()),
-          ind_dist(0, numkeys-1) {
+          ind_dist(0, numkeys-1), finished(false) {
         // Sets up the random number generator
         if (seed == 0) {
             seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -107,12 +104,14 @@ public:
     std::uniform_int_distribution<ValType2> val_dist2;
     std::uniform_int_distribution<size_t> ind_dist;
     size_t gen_seed;
+    // When set to true, it signals to the threads to stop running
+    std::atomic<bool> finished;
 };
 
 template <class KType>
 void insert_thread(AllEnvironment<KType> *env) {
     std::mt19937_64 gen(env->gen_seed);
-    while (!finished.load()) {
+    while (!env->finished.load()) {
         // Pick a random number between 0 and numkeys. If that slot is
         // not in use, lock the slot. Insert a random value into both
         // tables. The inserts should only be successful if the key
@@ -149,7 +148,7 @@ void insert_thread(AllEnvironment<KType> *env) {
 template <class KType>
 void delete_thread(AllEnvironment<KType> *env) {
     std::mt19937_64 gen(env->gen_seed);
-    while (!finished.load()) {
+    while (!env->finished.load()) {
         // Run deletes on a random key, check that the deletes
         // succeeded only if the keys were in the table. If the
         // deletes succeeded, check that the keys are indeed not in
@@ -177,7 +176,7 @@ void delete_thread(AllEnvironment<KType> *env) {
 template <class KType>
 void update_thread(AllEnvironment<KType> *env) {
     std::mt19937_64 gen(env->gen_seed);
-    while (!finished.load()) {
+    while (!env->finished.load()) {
         // Run updates on a random key, check that the updates
         // succeeded only if the keys were in the table. If the
         // updates succeeded, check that the keys are indeed in the
@@ -210,7 +209,7 @@ void update_thread(AllEnvironment<KType> *env) {
 template <class KType>
 void find_thread(AllEnvironment<KType> *env) {
     std::mt19937_64 gen(env->gen_seed);
-    while (!finished.load()) {
+    while (!env->finished.load()) {
         // Run finds on a random key and check that the presence of
         // the keys matches in_table
         size_t ind = env->ind_dist(gen);
@@ -252,7 +251,7 @@ void StressTest(AllEnvironment<KType> *env) {
     }
     // Sleeps before ending the threads
     sleep(test_len);
-    // finished.store(true);
+    env->finished.store(true);
     for (size_t i = 0; i < threads.size(); i++) {
         threads[i].join();
     }

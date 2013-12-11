@@ -1247,7 +1247,7 @@ private:
             new_table_info->locks_.reset(new locktype[kNumLocks]);
             new_table_info->num_inserts.resize(kNumCores);
             new_table_info->num_deletes.resize(kNumCores);
-        } catch (std::bad_alloc&) {
+        } catch (const std::bad_alloc&) {
             delete new_table_info;
             throw;
         }
@@ -1360,7 +1360,7 @@ private:
             // new_map goes out of scope
             table_info.store(new_map.table_info.load());
             new_map.table_info.store(nullptr);
-        } catch (std::bad_alloc& e) {
+        } catch (const std::bad_alloc&) {
             // Unlocks resources and rethrows the exception
             unlock_all(ti);
             unset_hazard_pointer();
