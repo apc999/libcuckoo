@@ -1,5 +1,6 @@
 #ifndef _CUCKOOHASH_MAP_HH
 #define _CUCKOOHASH_MAP_HH
+
 #include <functional>  // for std::hash
 #include <utility>     // for std::pair
 #include <stdexcept>
@@ -15,31 +16,36 @@
 #include <cmath>
 #include <limits>
 #include <bitset>
-#include <unistd.h>
 #include <type_traits>
+#include <cstdlib>
+#include <unistd.h>
 
 #include "cuckoohash_config.h"
 #include "util.h"
 #include "city.h"
 
-// A std::hash-style wrapper around cityhash
+/*! CityHasher is a std::hash-style wrapper around cityhash */
 template <class Key>
 class CityHasher {
 public:
+    /*! operator() will return the hash of the given key. */
     size_t operator()(Key k) {
         return CityHash64((const char*) &k, sizeof(k));
     }
 };
+
+/*! This is a template specialization of CityHasher for
+ *  std::string. */
 template <>
 class CityHasher<std::string> {
 public:
+    /*! operator() will return the hash of the given string. */
     size_t operator()(std::string& k) {
         return CityHash64(k.c_str(), k.size());
     }
 };
 
-/* cuckoohash_map is the primary class for the hash table. All the
- * functions that don't use iterators are implemented here. */
+/*! cuckoohash_map is the primary class for the hash table. */
 template <class Key, class T, class Hash = std::hash<Key>, class Pred = std::equal_to<Key> >
 class cuckoohash_map {
 
@@ -168,7 +174,7 @@ class cuckoohash_map {
      * in the table. */
     static inline void check_counterid() {
         if (counterid < 0) {
-            counterid = cheap_rand() % kNumCores;
+            counterid = rand() % kNumCores;
         }
     }
 
@@ -179,15 +185,15 @@ public:
     typedef Hash              hasher;
     typedef Pred              key_equal;
 
-    /* The constructor creates a new hash table with the given
+    /*! The constructor creates a new hash table with the given
      * hashpower. The number of buckets in the new hash table will be
-     * 2^hashpower_init. If constructor fails, it will throw an
-     * exception. */
+     * 2<SUP>hashpower_init</SUP>. If the constructor fails, it will
+     * throw an exception. */
     explicit cuckoohash_map(size_t hashpower_init = HASHPOWER_DEFAULT) {
         cuckoo_init(hashpower_init);
     }
 
-    /* The destructor deletes any remaining table pointers managed by
+    /*! The destructor deletes any remaining table pointers managed by
      * the hash table. */
     ~cuckoohash_map() {
         TableInfo *ti = table_info.load();
@@ -199,12 +205,12 @@ public:
         }
     }
 
-    /* clear removes all the elements in the hash table. */
+    /*! clear removes all the elements in the hash table. */
     void clear() {
         cuckoo_clear();
     }
 
-    /* size returns the number of items currently in the hash table.
+    /*! size returns the number of items currently in the hash table.
      * Since it doesn't lock the table, elements can be inserted
      * during the computation, so the result may not necessarily be
      * exact. */
@@ -216,12 +222,12 @@ public:
         return s;
     }
 
-    /* empty returns true if the table is empty. */
+    /*! empty returns true if the table is empty. */
     bool empty() {
         return size() == 0;
     }
 
-    /* hashpower returns the hashpower of the table, which is log2(the
+    /*! hashpower returns the hashpower of the table, which is log2(the
      * number of buckets). */
     size_t hashpower() {
         check_hazard_pointer();
@@ -231,7 +237,7 @@ public:
         return hashpower;
     }
 
-    /* bucket_count returns the number of buckets in the table. */
+    /*! bucket_count returns the number of buckets in the table. */
     size_t bucket_count() {
         check_hazard_pointer();
         TableInfo *ti = snapshot_table_nolock();
@@ -240,7 +246,7 @@ public:
         return buckets;
     }
 
-    /* load_factor returns the ratio of the number of items in the
+    /*! load_factor returns the ratio of the number of items in the
      * bucket to the total number of slots in the table. */
     float load_factor() {
         check_hazard_pointer();
@@ -250,7 +256,7 @@ public:
         return lf;
     }
 
-    /* find searches through the table for the given key, and stores
+    /*! find searches through the table for the given key, and stores
      * the associated value it finds. Since it takes bucket locks, it
      * contends with writes. */
     bool find(const key_type& key, mapped_type& val) {
@@ -267,7 +273,8 @@ public:
         return (st == ok);
     }
 
-    /* This is the same as find, except it returns the value it finds,
+    /*! This version of find does the same thing as the two-argument
+     * version, except it returns the key-value pair it finds,
      * throwing an exception if the key isn't in the table. */
     value_type find(const key_type& key) {
         mapped_type val;
@@ -280,7 +287,7 @@ public:
         }
     }
 
-    /* insert puts the given key-value pair into the table. It first
+    /*! insert puts the given key-value pair into the table. It first
      * checks that the key isn't already in the table, since the table
      * doesn't support duplicate keys. If the table is out of space,
      * insert will automatically expand until it can succeed. Note
@@ -317,7 +324,7 @@ public:
         return true;
     }
 
-    /* erase removes the given key from the table. If the key is not
+    /*! erase removes the given key from the table. If the key is not
      * there, it returns false. */
     bool erase(const key_type& key) {
         check_hazard_pointer();
@@ -334,8 +341,8 @@ public:
         return (st == ok);
     }
 
-    /* update changes the value of the given key. If the key is not
-     * there, it returns false. */
+    /*! update changes the value associated with the given key. If the
+     * key is not there, it returns false. */
     bool update(const key_type& key, const mapped_type& val) {
         check_hazard_pointer();
         size_t hv = hashed_key(key);
@@ -350,13 +357,13 @@ public:
         return (st == ok);
     }
 
-    /* rehash will size the table using the hashpower specified by n.
-     * Note that the number of buckets in the table will be 2^n after
-     * expansion. If n is not larger than the current hashpower, then
-     * the function does nothing. It returns true if the table
-     * expansion succeeded, and false otherwise. rehash can throw an
-     * exception if the expansion fails to allocate enough memory for
-     * the larger table. */
+    /*! rehash will size the table using the hashpower specified by n.
+     * Note that the number of buckets in the table will be
+     * 2<SUP>n</SUP> after expansion. If n is not larger than the
+     * current hashpower, then the function does nothing. It returns
+     * true if the table expansion succeeded, and false otherwise.
+     * rehash can throw an exception if the expansion fails to
+     * allocate enough memory for the larger table. */
     bool rehash(size_t n) {
         check_hazard_pointer();
         TableInfo* ti = snapshot_table_nolock();
@@ -368,8 +375,8 @@ public:
         return (st == ok);
     }
 
-    /* reserve will size the table to hold at least enough elements as
-     * specified by n. If the table can already hold that many
+    /*! reserve will size the table to hold at least enough elements
+     * as specified by n. If the table can already hold that many
      * elements, the function has no effect. Otherwise, the function
      * will expand the table to a hashpower sufficient to hold n
      * elements. It will return true if there was an expansion, and
@@ -389,13 +396,13 @@ public:
         return (st == ok);
     }
 
-    /* hash_function returns the hash function object used by the
+    /*! hash_function returns the hash function object used by the
      * table. */
     hasher hash_function() {
         return hashfn;
     }
 
-    /* key_eq returns the equality predicate object used by the
+    /*! key_eq returns the equality predicate object used by the
      * table. */
     key_equal key_eq() {
         return eqfn;
@@ -1380,21 +1387,22 @@ private:
     }
 
     // Iterator definitions
-public:
     friend class const_iterator;
+    friend class iterator;
+public:
 
-    /* An iterator through the table that is thread safe. For the
-     * duration of its existence, it takes all the locks on the table
-     * it is given, thereby ensuring that no other threads can modify
-     * the table while the iterator is in use. It allows movement
-     * forward and backward through the table as well as dereferencing
-     * items in the table. It maintains the assertion that an iterator
-     * is either an end iterator (which points past the end of the
-     * table), or it points to a filled slot. As soon as the iterator
-     * looses its lock on the table, all operations will throw an
-     * exception. Even though this class is available publicly, it is
-     * meant to be only created using the iterator functions present
-     * in cuckohash_map. */
+    /*! A const_iterator is an iterator through the table that is
+     * thread safe. For the duration of its existence, it takes all
+     * the locks on the table it is given, thereby ensuring that no
+     * other threads can modify the table while the iterator is in
+     * use. It allows movement forward and backward through the table
+     * as well as dereferencing items in the table. It maintains the
+     * assertion that an iterator is either an end iterator (which
+     * points past the end of the table), or it points to a filled
+     * slot. As soon as the iterator looses its lock on the table, all
+     * operations will throw an exception. Even though this class is
+     * available publicly, it is meant to be only created using the
+     * iterator functions present in cuckohash_map. */
     class const_iterator {
         /* The constructor locks the entire table, retrying until
          * snapshot_and_lock_all succeeds. Then it calculates end_pos
@@ -1425,9 +1433,11 @@ public:
             }
         }
 
+        friend class cuckoohash_map<Key, T, Hash, Pred>;
+
     public:
-        /* This is an rvalue-reference constructor that takes the lock from
-         * the argument and copies its state. */
+        /*! This is an rvalue-reference constructor that takes the
+         * lock from the argument and copies its state. */
         const_iterator(const_iterator&& it) {
             if (this == &it) {
                 return;
@@ -1436,8 +1446,8 @@ public:
             it.has_table_lock = false;
         }
 
-        /* This does the same thing as the rvalue-reference
-         * constructor. */
+        /*! The assignment operator behaves identically to the
+         * rvalue-reference constructor. */
         const_iterator* operator=(const_iterator&& it) {
             if (this == &it) {
                 return this;
@@ -1447,9 +1457,9 @@ public:
             return this;
         }
 
-        /* release unlocks the table, thereby freeing it up for other
-         * operations, but also invalidating all future operations with
-         * this iterator. */
+        /*! release unlocks the table, thereby freeing it up for other
+         * operations, but also invalidating all future operations
+         * with this iterator. */
         void release() {
             if (has_table_lock) {
                 hm_->unlock_all(ti_);
@@ -1459,24 +1469,25 @@ public:
             }
         }
 
+        /*! The destructor simply calls release. */
         ~const_iterator() {
             release();
         }
 
-        /* is_end returns true if the iterator is at end_pos, which means
+        /*! is_end returns true if the iterator is at end_pos, which means
          * it is past the end of the table. */
         bool is_end() {
             return (index_ == end_pos.first && slot_ == end_pos.second);
         }
 
-        /* is_begin returns true if the iterator is at begin_pos, which
+        /*! is_begin returns true if the iterator is at begin_pos, which
          * means it is at the first item in the table. */
         bool is_begin() {
             return (index_ == begin_pos.first && slot_ == begin_pos.second);
         }
 
 
-        /* The dereferenc operator returns a copy of the data in the
+        /*! The dereference operator returns a copy of the data in the
          * bucket, so that any modification to the returned pair doesn't
          * affect the table itself. Since we don't want to allow the user
          * to arbitrarily modify keys or values, we don't provide a "->"
@@ -1490,10 +1501,10 @@ public:
             return {ti_->buckets_[index_].keys[slot_], ti_->buckets_[index_].vals[slot_]};
         }
 
-        /* ++ moves the iterator forwards to the next nonempty slot. If it
-         * reaches the end of the table, it becomes an end iterator. It
-         * throws an exception if the iterator is already at the end of
-         * the table. */
+        /*! The prefix increment operator moves the iterator forwards
+         * to the next nonempty slot. If it reaches the end of the
+         * table, it becomes an end iterator. It throws an exception
+         * if the iterator is already at the end of the table. */
         const_iterator* operator++() {
             check_lock();
             if (is_end()) {
@@ -1503,7 +1514,8 @@ public:
             return this;
         }
 
-        /* This is the same as the prefix version of the operator. */
+        /*! The postfix increment operator behaves identically to the
+         *  prefix increment operator. */
         const_iterator* operator++(int) {
             check_lock();
             if (is_end()) {
@@ -1513,10 +1525,10 @@ public:
             return this;
         }
 
-        /* -- moves the iterator backwards to the previous nonempty slot.
-         * If we aren't at the beginning, then the backward_filled_slot
-         * operation should not fail. If we are, it throws an
-         * exception. */
+        /*! The prefix decrement operator moves the iterator backwards
+         * to the previous nonempty slot. If we aren't at the
+         * beginning, then the backward_filled_slot operation should
+         * not fail. If we are, it throws an exception. */
         const_iterator* operator--() {
             check_lock();
             if (is_begin()) {
@@ -1526,7 +1538,8 @@ public:
             return this;
         }
 
-        /* This is the same as the prefix version of the operator. */
+        /*! The postfix decrement operator behaves identically to the
+         *  prefix decrement operator. */
         const_iterator* operator--(int) {
             check_lock();
             if (is_begin()) {
@@ -1667,11 +1680,10 @@ public:
         const char* end_increment = "Cannot increment: iterator points past the end of the table";
         const char* begin_decrement = "Cannot decrement: iterator points to the beginning of the table";
 
-        friend class cuckoohash_map<Key, T, Hash, Pred>;
     };
 
-    /* A mut_iterator is just a const_iterator with an update
-     * method. */
+    /*! An iterator is simply a const_iterator with an update
+     *  method. */
     class iterator : public const_iterator {
         /* These constructors do basically the same thing as
          * const_iterators. We also allow creating a iterator from a
@@ -1679,12 +1691,21 @@ public:
         iterator(cuckoohash_map<Key, T, Hash, Pred> *hm, bool is_end)
             : const_iterator(hm, is_end) {}
 
+        friend class cuckoohash_map<Key, T, Hash, Pred>;
+
     public:
+
+        /*! This constructor is identical to the rvalue-reference
+         *  constructor of const_iterator. */
         iterator(iterator&& it)
             : const_iterator(std::move(it)) {}
+        /*! This constructor allows converting from a const_iterator
+         *  to an iterator. */
         iterator(const_iterator&& it)
             : const_iterator(std::move(it)) {}
 
+        /* The assignment operator behaves identically to the
+         * rvalue-reference constructor. */
         iterator* operator=(iterator&& it) {
             if (this == &it) {
                 return this;
@@ -1694,7 +1715,7 @@ public:
             return this;
         }
 
-        /* set_value sets the value pointed to by the iterator. This
+        /*! set_value sets the value pointed to by the iterator. This
          * involves modifying the hash table itself, but since we have a
          * lock on the table, we are okay. Since we are only changing the
          * value in the bucket, the element will retain it's position, so
@@ -1707,26 +1728,33 @@ public:
             assert(this->ti_->buckets_[this->index_].occupied[this->slot_]);
             this->ti_->buckets_[this->index_].vals[this->slot_] = val;
         }
-
-        friend class cuckoohash_map<Key, T, Hash, Pred>;
     };
 
 // Public iterator functions
 public:
+    /*! cbegin returns a const_iterator to the first filled slot in the
+     * table. */
     const_iterator cbegin() {
         return const_iterator(this, false);
     }
+
+    /*! cend returns a const_iterator set past the end of the table. */
     const_iterator cend() {
         return const_iterator(this, true);
     }
+
+    /*! begin returns an iterator to the first filled slot in the
+     * table. */
     iterator begin() {
         return iterator(this, false);
     }
+
+    /*! end returns an iterator set past the end of the table. */
     iterator end() {
         return iterator(this, true);
     }
 
-    /* snapshot_table allocates a vector and, using a const_iterator
+    /*! snapshot_table allocates a vector and, using a const_iterator
      * stores all the elements currently in the table. */
     std::vector<value_type> snapshot_table() {
         const_iterator it = cbegin();
