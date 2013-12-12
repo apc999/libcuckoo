@@ -207,7 +207,14 @@ public:
 
     /*! clear removes all the elements in the hash table. */
     void clear() {
-        cuckoo_clear();
+        check_hazard_pointer();
+        expansion_lock.lock();
+        TableInfo *ti = snapshot_and_lock_all();
+        assert(ti != nullptr);
+        cuckoo_clear(ti);
+        unlock_all(ti);
+        expansion_lock.unlock();
+        unset_hazard_pointer();
     }
 
     /*! size returns the number of items currently in the hash table.
@@ -413,12 +420,32 @@ private:
      * occupied bitset, which indicates whether the slot at the given
      * bit index is in the table or not. */
     typedef char partial_t;
-    typedef struct {
+    struct Bucket {
         std::bitset<SLOT_PER_BUCKET> occupied;
         partial_t partials[SLOT_PER_BUCKET];
         key_type keys[SLOT_PER_BUCKET];
         mapped_type vals[SLOT_PER_BUCKET];
-    } Bucket;
+
+        void setKV(size_t pos, const key_type& k, const mapped_type& v) {
+            occupied.set(pos);
+            key_allocator.construct(keys+pos, k);
+            val_allocator.construct(vals+pos, v);
+        }
+
+        void eraseKV(size_t pos) {
+            occupied.reset(pos);
+            key_allocator.destroy(keys+pos);
+            val_allocator.destroy(vals+pos);
+        }
+
+        void clear() {
+            for (size_t i = 0; i < SLOT_PER_BUCKET; i++) {
+                if (occupied[i]) {
+                    eraseKV(i);
+                }
+            }
+        }
+    };
 
     /* cacheint is a cache-aligned atomic integer type. */
     struct cacheint {
@@ -444,14 +471,52 @@ private:
         size_t hashpower_;
 
         // unique pointer to the array of buckets
-        std::unique_ptr<Bucket[]> buckets_;
+        Bucket* buckets_;
 
         // unique pointer to the array of mutexes
-        std::unique_ptr<locktype[]> locks_;
+        locktype* locks_;
 
         // per-core counters for the number of inserts and deletes
         std::vector<cacheint> num_inserts;
         std::vector<cacheint> num_deletes;
+
+        /* The constructor allocates the memory for the table. For
+         * buckets, it uses the bucket_allocator, so that we can free
+         * memory independently of calling its destructor. It
+         * allocates one cacheint for each core in num_inserts and
+         * num_deletes. */
+        TableInfo(const size_t hashtable_init) {
+            buckets_ = nullptr;
+            locks_ = nullptr;
+            try {
+                hashpower_ = hashtable_init;
+                tablesize_ = sizeof(Bucket) * hashsize(hashpower_);
+                buckets_ = bucket_allocator.allocate(hashsize(hashpower_));
+                for (size_t i = 0; i < hashsize(hashpower_); i++) {
+                    bucket_allocator.construct(buckets_+i);
+                }
+                locks_ = new locktype[kNumLocks];
+                num_inserts.resize(kNumCores);
+                num_deletes.resize(kNumCores);
+            } catch (const std::bad_alloc&) {
+                if (buckets_ != nullptr) {
+                    bucket_allocator.deallocate(buckets_, hashsize(hashpower_));
+                }
+                if (locks_ != nullptr) {
+                    delete[] locks_;
+                }
+                throw;
+            }
+        }
+
+        ~TableInfo() {
+            for (size_t i = 0; i < hashsize(hashpower_); i++) {
+                buckets_[i].clear();
+            }
+            bucket_allocator.deallocate(buckets_, hashsize(hashpower_));
+            delete[] locks_;
+        }
+
     };
     std::atomic<TableInfo*> table_info;
 
@@ -463,6 +528,9 @@ private:
 
     static hasher hashfn;
     static key_equal eqfn;
+    static std::allocator<key_type> key_allocator;
+    static std::allocator<mapped_type> val_allocator;
+    static std::allocator<Bucket> bucket_allocator;
 
     /* lock locks the given bucket index. */
     static inline void lock(const TableInfo *ti, const size_t i) {
@@ -786,14 +854,19 @@ private:
         while (q.not_full()) {
             b_slot x = q.dequeue();
             // Picks a random slot to start from
-            for (size_t i = 0; i < SLOT_PER_BUCKET && q.not_full(); i++) {
-                size_t slot = i;
+            for (size_t slot = 0; slot < SLOT_PER_BUCKET && q.not_full(); slot++) {
+                lock(ti, x.bucket);
+                if (!ti->buckets_[x.bucket].occupied[slot]) {
+                    // We can terminate the search here
+                    x.pathcode = x.pathcode * SLOT_PER_BUCKET + slot;
+                    unlock(ti, x.bucket);
+                    return x;
+                }
                 // Create a new b_slot item, that represents the
                 // bucket we would look at after searching x.bucket
-                // for empty slots. This means we completely skip
-                // searching i1 and i2, but they should have already
-                // been searched by cuckoo_insert, so that's okay.
+                // for empty slots.
                 const size_t hv = hashed_key(ti->buckets_[x.bucket].keys[slot]);
+                unlock(ti, x.bucket);
                 b_slot y(alt_index(ti, hv, x.bucket),
                          x.pathcode * SLOT_PER_BUCKET + slot, x.depth+1);
 
@@ -802,8 +875,7 @@ private:
                 // the bucket so that no changes occur while
                 // iterating.
                 lock(ti, y.bucket);
-                for (int m = 0; m < SLOT_PER_BUCKET; m++) {
-                    const size_t j = m;
+                for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
                     if (!ti->buckets_[y.bucket].occupied.test(j)) {
                         y.pathcode = y.pathcode * SLOT_PER_BUCKET + j;
                         unlock(ti, y.bucket);
@@ -850,11 +922,25 @@ private:
         CuckooRecord *curr = cuckoo_path;
         if (x.pathcode == 0) {
             curr->bucket = i1;
-            curr->key = ti->buckets_[i1].keys[curr->slot];
+            lock(ti, curr->bucket);
+            if (!ti->buckets_[curr->bucket].occupied[curr->slot]) {
+                // We can terminate here
+                unlock(ti, curr->bucket);
+                return 0;
+            }
+            curr->key = ti->buckets_[curr->bucket].keys[curr->slot];
+            unlock(ti, curr->bucket);
         } else {
             assert(x.pathcode == 1);
             curr->bucket = i2;
-            curr->key = ti->buckets_[i2].keys[curr->slot];
+            lock(ti, curr->bucket);
+            if (!ti->buckets_[curr->bucket].occupied[curr->slot]) {
+                // We can terminate here
+                unlock(ti, curr->bucket);
+                return 0;
+            }
+            curr->key = ti->buckets_[curr->bucket].keys[curr->slot];
+            unlock(ti, curr->bucket);
         }
         for (int i = 1; i <= x.depth; i++) {
             CuckooRecord *prev = curr++;
@@ -864,7 +950,14 @@ private:
             // We get the bucket that this slot is on by computing the
             // alternate index of the previous bucket
             curr->bucket = alt_index(ti, prevhv, prev->bucket);
+            lock(ti, curr->bucket);
+            if (!ti->buckets_[curr->bucket].occupied[curr->slot]) {
+                // We can terminate here
+                unlock(ti, curr->bucket);
+                return i;
+            }
             curr->key = ti->buckets_[curr->bucket].keys[curr->slot];
+            unlock(ti, curr->bucket);
         }
         return x.depth;
     }
@@ -939,10 +1032,8 @@ private:
             if (!is_simple) {
                 ti->buckets_[tb].partials[ts] = ti->buckets_[fb].partials[fs];
             }
-            ti->buckets_[tb].keys[ts] = ti->buckets_[fb].keys[fs];
-            ti->buckets_[tb].vals[ts] = ti->buckets_[fb].vals[fs];
-            ti->buckets_[tb].occupied.set(ts);
-            ti->buckets_[fb].occupied.reset(fs);
+            ti->buckets_[tb].setKV(ts, ti->buckets_[fb].keys[fs], ti->buckets_[fb].vals[fs]);
+            ti->buckets_[fb].eraseKV(fs);
             if (depth == 1) {
                 // Don't unlock fb or ob, since they are needed in
                 // cuckoo_insert. Only unlock tb if it doesn't unlock
@@ -1055,9 +1146,7 @@ private:
         if (!is_simple) {
             ti->buckets_[i].partials[j] = partial;
         }
-        ti->buckets_[i].keys[j] = key;
-        ti->buckets_[i].vals[j] = val;
-        ti->buckets_[i].occupied.set(j);
+        ti->buckets_[i].setKV(j, key, val);
         ti->num_inserts[counterid].num.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -1101,7 +1190,7 @@ private:
                 continue;
             }
             if (eqfn(ti->buckets_[i].keys[j], key)) {
-                ti->buckets_[i].occupied.reset(j);
+                ti->buckets_[i].eraseKV(j);
                 ti->num_deletes[counterid].num.fetch_add(1, std::memory_order_relaxed);
                 return true;
             }
@@ -1178,8 +1267,8 @@ private:
         }
 
         // we are unlucky, so let's perform cuckoo hashing
-        size_t insert_bucket;
-        size_t insert_slot;
+        size_t insert_bucket = 0;
+        size_t insert_slot = 0;
         cuckoo_status st = run_cuckoo(ti, i1, i2, insert_bucket, insert_slot);
         if (st == failure_under_expansion) {
             /* The run_cuckoo operation operated on an old version of
@@ -1243,47 +1332,24 @@ private:
     }
 
     /* cuckoo_init initializes the hashtable, given an initial
-     * hashpower as the argument. It allocates one cacheint for each
-     * core in num_inserts and num_deletes. */
+     * hashpower as the argument. */
     cuckoo_status cuckoo_init(const size_t hashtable_init) {
-        TableInfo *new_table_info = new TableInfo;
-        try {
-            new_table_info->hashpower_ = (hashtable_init > 0) ? hashtable_init : HASHPOWER_DEFAULT;
-            new_table_info->tablesize_ = sizeof(Bucket) * hashsize(new_table_info->hashpower_);
-            new_table_info->buckets_.reset(new Bucket[hashsize(new_table_info->hashpower_)]);
-            new_table_info->locks_.reset(new locktype[kNumLocks]);
-            new_table_info->num_inserts.resize(kNumCores);
-            new_table_info->num_deletes.resize(kNumCores);
-        } catch (const std::bad_alloc&) {
-            delete new_table_info;
-            throw;
-        }
-
-        table_info.store(new_table_info);
-        cuckoo_clear();
-
+        table_info.store(new TableInfo(hashtable_init));
+        cuckoo_clear(table_info.load());
         return ok;
     }
 
-    /* cuckoo_clear empties the table. */
-    cuckoo_status cuckoo_clear() {
-        check_hazard_pointer();
-        expansion_lock.lock();
-        TableInfo *ti = snapshot_and_lock_all();
-        assert(ti != nullptr);
-
+    /* cuckoo_clear empties the table, calling the destructors of all
+     * the elements it removes from the table. It assumes the locks
+     * are taken as necessary. */
+    cuckoo_status cuckoo_clear(TableInfo *ti) {
         for (size_t i = 0; i < hashsize(ti->hashpower_); i++) {
-            ti->buckets_[i].occupied.reset();
+            ti->buckets_[i].clear();
         }
-
         for (size_t i = 0; i < ti->num_inserts.size(); i++) {
             ti->num_inserts[i].num.store(0);
             ti->num_deletes[i].num.store(0);
         }
-
-        unlock_all(ti);
-        expansion_lock.unlock();
-        unset_hazard_pointer();
         return ok;
     }
 
@@ -1783,6 +1849,18 @@ cuckoohash_map<Key, T, Hash, Pred>::hashfn;
 template <class Key, class T, class Hash, class Pred>
 typename cuckoohash_map<Key, T, Hash, Pred>::key_equal
 cuckoohash_map<Key, T, Hash, Pred>::eqfn;
+
+template <class Key, class T, class Hash, class Pred>
+typename std::allocator<Key>
+cuckoohash_map<Key, T, Hash, Pred>::key_allocator;
+
+template <class Key, class T, class Hash, class Pred>
+typename std::allocator<T>
+cuckoohash_map<Key, T, Hash, Pred>::val_allocator;
+
+template <class Key, class T, class Hash, class Pred>
+typename std::allocator<typename cuckoohash_map<Key, T, Hash, Pred>::Bucket>
+cuckoohash_map<Key, T, Hash, Pred>::bucket_allocator;
 
 
 template <class Key, class T, class Hash, class Pred>
