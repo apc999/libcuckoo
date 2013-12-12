@@ -11,16 +11,6 @@ configure
 depcomp
 install-sh
 missing
-src/.deps/
-src/.libs/
-src/Makefile
-src/Makefile.in
-src/test_cuckoo
-src/bench_cuckoo
-src/test_cuckoo_mt
-src/app_cuckoo
-src/test_iterator
-stamp-h1
 config.guess
 config.h.in~
 config.sub

@@ -4,7 +4,6 @@
 AC_PREREQ([2.67])
 AC_INIT([libcuckoo], [0.1], [fawn-dev@mailman.srv.cs.cmu.edu])
 AM_INIT_AUTOMAKE([foreign])
-#AC_CONFIG_SRCDIR([src/])
 AC_CONFIG_HEADERS([config.h])
 
 AC_CONFIG_MACRO_DIR([m4])
@@ -105,7 +104,6 @@ AH_BOTTOM([#if HAVE_STDBOOL_H
 
 
 AC_CONFIG_FILES([ Makefile
-                  src/Makefile
                   lib/Makefile
                   testing/Makefile
                 ])
