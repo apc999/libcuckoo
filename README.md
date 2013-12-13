@@ -54,6 +54,12 @@ table's various features. The entire test suite can be run with the
 ``runtest.py`` script, and individual tests, which have the suffix
 ".out" can be run individually as well.
 
+Documentation
+==================
+
+The Doxygen-generated documentation is available at the
+[project page](http://manugoyal.github.io/libcuckoo/).
+
 Issue Report
 ============
 
