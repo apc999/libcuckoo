@@ -24,11 +24,12 @@
 #include "util.h"
 #include "city.h"
 
-/*! CityHasher is a std::hash-style wrapper around cityhash */
+/*! CityHasher is a std::hash-style wrapper around cityhash. We
+ *  encourage using CityHash over the std::hash function if
+ *  possible. */
 template <class Key>
 class CityHasher {
 public:
-    /*! operator() will return the hash of the given key. */
     size_t operator()(Key k) {
         return CityHash64((const char*) &k, sizeof(k));
     }
@@ -39,13 +40,17 @@ public:
 template <>
 class CityHasher<std::string> {
 public:
-    /*! operator() will return the hash of the given string. */
     size_t operator()(std::string& k) {
         return CityHash64(k.c_str(), k.size());
     }
 };
 
-/*! cuckoohash_map is the primary class for the hash table. */
+/*! cuckoohash_map is the hash table class. Its interface resembles
+ *  that of STL's unordered_map. The table stores items in a set of
+ *  buckets, each of which has a lock to ensure multiple threads don't
+ *  modify the same elements. Most operations will lock no more than
+ *  two buckets at a time, thereby allowing for concurrent reads and
+ *  writes. */
 template <class Key, class T, class Hash = std::hash<Key>, class Pred = std::equal_to<Key> >
 class cuckoohash_map {
 
@@ -93,9 +98,10 @@ class cuckoohash_map {
      * map checks before deleting any old TableInfo pointers. */
     static __thread void** hazard_pointer;
 
-    /* A GlobalHazardPointerList stores a list of pointers that cannot be
-     * deleted by an expansion thread. Each thread gets its own node in
-     * the list, whose data pointer it can modify without contention */
+    /* A GlobalHazardPointerList stores a list of pointers that cannot
+     * be deleted by an expansion thread. Each thread gets its own
+     * node in the list, whose data pointer it can modify without
+     * contention. */
     class GlobalHazardPointerList {
         std::list<void*> hp_;
         std::mutex lock_;
@@ -194,7 +200,8 @@ public:
     }
 
     /*! The destructor deletes any remaining table pointers managed by
-     * the hash table. */
+     * the hash table, also destroying all remaining elements in the
+     * table. */
     ~cuckoohash_map() {
         TableInfo *ti = table_info.load();
         if (ti != nullptr) {
@@ -205,7 +212,8 @@ public:
         }
     }
 
-    /*! clear removes all the elements in the hash table. */
+    /*! clear removes all the elements in the hash table, calling
+     *  their destructors. */
     void clear() {
         check_hazard_pointer();
         expansion_lock.lock();
@@ -234,7 +242,7 @@ public:
         return size() == 0;
     }
 
-    /*! hashpower returns the hashpower of the table, which is log2(the
+    /*! hashpower returns the hashpower of the table, which is log<SUB>2</SUB>(the
      * number of buckets). */
     size_t hashpower() {
         check_hazard_pointer();
@@ -254,7 +262,7 @@ public:
     }
 
     /*! load_factor returns the ratio of the number of items in the
-     * bucket to the total number of slots in the table. */
+     * table to the total number of available slots in the table. */
     float load_factor() {
         check_hazard_pointer();
         const TableInfo *ti = snapshot_table_nolock();
@@ -264,8 +272,7 @@ public:
     }
 
     /*! find searches through the table for the given key, and stores
-     * the associated value it finds. Since it takes bucket locks, it
-     * contends with writes. */
+     * the associated value it finds. */
     bool find(const key_type& key, mapped_type& val) {
         check_hazard_pointer();
         size_t hv = hashed_key(key);
@@ -282,7 +289,8 @@ public:
 
     /*! This version of find does the same thing as the two-argument
      * version, except it returns the key-value pair it finds,
-     * throwing an exception if the key isn't in the table. */
+     * throwing an std::out_of_range exception if the key isn't in the
+     * table. */
     value_type find(const key_type& key) {
         mapped_type val;
         bool done = find(key, val);
@@ -298,8 +306,8 @@ public:
      * checks that the key isn't already in the table, since the table
      * doesn't support duplicate keys. If the table is out of space,
      * insert will automatically expand until it can succeed. Note
-     * that expansion can throw an exception, which insert will not
-     * handle. */
+     * that expansion can throw an exception, which insert will
+     * propagate. */
     bool insert(const key_type& key, const mapped_type& val) {
         check_hazard_pointer();
         check_counterid();
@@ -331,8 +339,9 @@ public:
         return true;
     }
 
-    /*! erase removes the given key from the table. If the key is not
-     * there, it returns false. */
+    /*! erase removes the given key and it's associated value from the
+     * table, calling their destructors. If the key is not there, it
+     * returns false. */
     bool erase(const key_type& key) {
         check_hazard_pointer();
         check_counterid();
@@ -418,7 +427,9 @@ public:
 private:
     /* The Bucket type holds SLOT_PER_BUCKET keys and values, and a
      * occupied bitset, which indicates whether the slot at the given
-     * bit index is in the table or not. */
+     * bit index is in the table or not. It allows constructing and
+     * destroying key-value pairs separate from allocating and
+     * deallocating the memory. */
     typedef char partial_t;
     struct Bucket {
         std::bitset<SLOT_PER_BUCKET> occupied;
@@ -632,7 +643,6 @@ private:
         }
     }
 
-
     /* snapshot_table_nolock loads the table info pointer and sets the
      * hazard pointer, whithout locking anything. There is a
      * possibility that after loading a snapshot and setting the
@@ -773,8 +783,8 @@ private:
 
     /* partial_key returns a partial_t representing the upper
      * sizeof(partial_t) bytes of the hashed key. This is used for
-     * partial-key cuckoohashing. If the key type is POD, we don't use
-     * partial keys, so we just return 0. */
+     * partial-key cuckoohashing. If the key type is POD and small, we
+     * don't use partial keys, so we just return 0. */
     template <class Bogus = void*>
     static inline typename std::enable_if<sizeof(Bogus) && !is_simple, partial_t>::type partial_key(const size_t hv) {
         return (partial_t)(hv >> ((sizeof(size_t)-sizeof(partial_t)) * 8));
@@ -1461,14 +1471,17 @@ public:
      * thread safe. For the duration of its existence, it takes all
      * the locks on the table it is given, thereby ensuring that no
      * other threads can modify the table while the iterator is in
-     * use. It allows movement forward and backward through the table
-     * as well as dereferencing items in the table. It maintains the
-     * assertion that an iterator is either an end iterator (which
-     * points past the end of the table), or it points to a filled
-     * slot. As soon as the iterator looses its lock on the table, all
-     * operations will throw an exception. Even though this class is
-     * available publicly, it is meant to be only created using the
-     * iterator functions present in cuckohash_map. */
+     * use. Note that this also means that only one iterator can be
+     * active on a table at one time and furthermore that all
+     * operations on the table, except the size, empty, hashpower,
+     * bucket_count, and load_factor methods, will stall until the
+     * iterator loses its lock. The iterator allows movement forward
+     * and backward through the table as well as dereferencing items
+     * in the table. It maintains the invariant that the iterator is
+     * either an end iterator (which points past the end of the
+     * table), or points to a filled slot. As soon as the iterator
+     * looses its lock on the table, all operations will throw an
+     * exception. */
     class const_iterator {
         /* The constructor locks the entire table, retrying until
          * snapshot_and_lock_all succeeds. Then it calculates end_pos
@@ -1502,8 +1515,11 @@ public:
         friend class cuckoohash_map<Key, T, Hash, Pred>;
 
     public:
+
         /*! This is an rvalue-reference constructor that takes the
-         * lock from the argument and copies its state. */
+        lock from the argument and copies its state. To create an
+        iterator from scratch, call the cbegin or cend methods of
+        cuckoohash_map. */
         const_iterator(const_iterator&& it) {
             if (this == &it) {
                 return;
@@ -1748,12 +1764,12 @@ public:
 
     };
 
-    /*! An iterator is simply a const_iterator with an update
-     *  method. */
+    /*! An iterator supports the same operations as the const_iterator
+     *  and provides an additional set_value method to allow changing
+     *  values in the table. */
     class iterator : public const_iterator {
-        /* These constructors do basically the same thing as
-         * const_iterators. We also allow creating a iterator from a
-         * const_iterator. */
+        /* This constructor does the same thing as the private
+         * const_iterator one. */
         iterator(cuckoohash_map<Key, T, Hash, Pred> *hm, bool is_end)
             : const_iterator(hm, is_end) {}
 
@@ -1782,10 +1798,10 @@ public:
         }
 
         /*! set_value sets the value pointed to by the iterator. This
-         * involves modifying the hash table itself, but since we have a
-         * lock on the table, we are okay. Since we are only changing the
-         * value in the bucket, the element will retain it's position, so
-         * this is just a simple assignment. */
+         * involves modifying the hash table itself, but since we have
+         * a lock on the table, we are okay. We are only changing the
+         * value in the bucket, so the element will retain it's
+         * position in the table. */
         void set_value(const mapped_type val) {
             this->check_lock();
             if (this->is_end()) {
