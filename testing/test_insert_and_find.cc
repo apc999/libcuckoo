@@ -43,7 +43,7 @@ public:
             KeyType k;
             do {
                 k = k_dist(gen);
-            } while (k >= 0 && k < numkeys);
+            } while (k < numkeys);
             nonkeys[i] = k;
         }
     }
