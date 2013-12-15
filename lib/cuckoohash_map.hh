@@ -1,28 +1,31 @@
 #ifndef _CUCKOOHASH_MAP_HH
 #define _CUCKOOHASH_MAP_HH
 
-#include <functional>  // for std::hash
-#include <utility>     // for std::pair
-#include <stdexcept>
-#include <cstring>
-#include <cassert>
-#include <memory>
 #include <atomic>
-#include <thread>
-#include <chrono>
-#include <mutex>
-#include <vector>
-#include <list>
-#include <cmath>
-#include <limits>
 #include <bitset>
-#include <type_traits>
+#include <cassert>
+#include <chrono>
+#include <cmath>
 #include <cstdlib>
+#include <cstring>
+#include <functional>           // for std::hash
+#include <limits>
+#include <list>
+#include <memory>
+#include <mutex>
+#include <stdexcept>
+#include <thread>
+#include <type_traits>
 #include <unistd.h>
+#include <utility>              // for std::pair
+#include <vector>
 
-#include "cuckoohash_config.h"
-#include "util.h"
-#include "city.h"
+#include "city.h"               // for cityhash
+#include "cuckoohash_config.h"  // for configuration
+#include "util.h"               // for DBG
+
+
+namespace cuckoohash_map {
 
 /*! CityHasher is a std::hash-style wrapper around cityhash. We
  *  encourage using CityHash over the std::hash function if
@@ -1888,4 +1891,5 @@ const size_t cuckoohash_map<Key, T, Hash, Pred>::kNumCores =
     std::thread::hardware_concurrency() == 0 ?
     sysconf(_SC_NPROCESSORS_ONLN) : std::thread::hardware_concurrency();
 
+}  // namespace cuckoohash_map
 #endif

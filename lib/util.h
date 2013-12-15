@@ -7,6 +7,8 @@
 
 #include "cuckoohash_config.h" // for DEBUG
 
+namespace cuckoohash_map {
+
 #define ANSI_COLOR_RED     "\x1b[31m"
 #define ANSI_COLOR_GREEN   "\x1b[32m"
 #define ANSI_COLOR_YELLOW  "\x1b[33m"
@@ -20,6 +22,6 @@
 #else
 #  define DBG(fmt, args...)  do {} while (0)
 #endif
-
+}  // namespace cuckoohash_map
 
 #endif

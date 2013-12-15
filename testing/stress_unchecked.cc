@@ -22,8 +22,9 @@
 #include <unistd.h>
 
 #include "cuckoohash_map.hh"
-#include "cuckoohash_config.h" // for SLOT_PER_BUCKET
 #include "test_util.cc"
+
+using cuckoohash_map::cuckoohash_map;
 
 typedef uint32_t KeyType;
 typedef std::string KeyType2;
